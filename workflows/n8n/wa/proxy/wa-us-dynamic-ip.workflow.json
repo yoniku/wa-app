@@ -1,0 +1,114 @@
+{
+  "name": "WA US Random Dynamic IP",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "wa-us-dynamic-ip-trigger",
+      "name": "When Executed by WA Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst body = $json.body || $json || {};\nconst purpose = String(body.proxy_purpose || body.purpose || 'WA_REGISTRATION').trim();\nconst seed = `${$execution.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`;\nreturn [{ json: {\n  workspace_id: body.workspace_id || 'default',\n  job_id: body.job_id || $execution.id,\n  request_id: body.request_id || $execution.id,\n  purpose,\n  account_id: `wa-us-dyn-${seed}`.slice(0, 120),\n  selection_seed: seed,\n} }];\n"
+      },
+      "id": "wa-us-dynamic-ip-normalize",
+      "name": "Normalize Dynamic IP Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.PROXY_RUNTIME_API_BASE_URL + '/leases/acquire' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { account_id: $('Normalize Dynamic IP Input').first().json.account_id, purpose: $('Normalize Dynamic IP Input').first().json.purpose, force_new: true, policy: { mode: 'PROXY_SESSION_MODE_STICKY', region: 'US', sticky_ttl: '600s', labels: { country_code: 'US', selection_seed: $('Normalize Dynamic IP Input').first().json.selection_seed, job_id: $('Normalize Dynamic IP Input').first().json.job_id } }, chain_policy: { country_code: 'US', purpose: $('Normalize Dynamic IP Input').first().json.purpose, strategy: 'PROXY_CHAIN_STRATEGY_REGION_AWARE', max_attempts: 1, allow_direct_dynamic_gateway: true, prefer_line_proxy: false } } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wa-us-dynamic-ip-acquire",
+      "name": "Acquire US Dynamic IP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst input = $('Normalize Dynamic IP Input').first().json;\nconst response = $('Acquire US Dynamic IP').first().json || {};\nconst statusCode = response.statusCode || response.status || 200;\nconst body = response.body || response || {};\nif (statusCode < 200 || statusCode >= 300) {\n  return [{ json: { success: false, accepted: false, proxy_mode: 'US_RANDOM_DYNAMIC_IP', country_code: 'US', account_id: input.account_id, error_message: `proxy-runtime dynamic IP acquire returned HTTP ${statusCode}` } }];\n}\nconst lease = body.lease || {};\nconst egress = body.egress || lease.egress || {};\nfunction runtimeHost() {\n  const base = String($env.PROXY_RUNTIME_API_BASE_URL || '').trim();\n  try { return new URL(base).hostname || 'proxy-runtime'; } catch { return 'proxy-runtime'; }\n}\nfunction endpointScheme(endpoint) {\n  return String(endpoint.protocol || '').toUpperCase().includes('SOCKS5') ? 'socks5' : 'http';\n}\nfunction endpointHost(endpoint) {\n  const host = String(endpoint.host || '').trim();\n  if (!host || host === '0.0.0.0' || host === '127.0.0.1' || host === 'localhost' || host === '::' || host === '::1') return runtimeHost();\n  return host;\n}\nconst port = Number(egress.port || 0);\nif (!port) {\n  return [{ json: { success: false, accepted: false, proxy_mode: 'US_RANDOM_DYNAMIC_IP', country_code: 'US', account_id: lease.account_id || input.account_id, lease_id: lease.lease_id || '', error_message: 'proxy-runtime dynamic IP lease has no egress endpoint' } }];\n}\nconst scheme = endpointScheme(egress);\nconst host = endpointHost(egress);\nreturn [{ json: {\n  success: true,\n  accepted: true,\n  proxy_mode: 'US_RANDOM_DYNAMIC_IP',\n  country_code: 'US',\n  account_id: lease.account_id || input.account_id,\n  lease_id: lease.lease_id || '',\n  provider_account_id: lease.provider_account_id || '',\n  proxy_url: `${scheme}://${host}:${port}`,\n} }];\n"
+      },
+      "id": "wa-us-dynamic-ip-build",
+      "name": "Build Dynamic IP Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "When Executed by WA Workflow": {
+      "main": [
+        [
+          {
+            "node": "Normalize Dynamic IP Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Dynamic IP Input": {
+      "main": [
+        [
+          {
+            "node": "Acquire US Dynamic IP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acquire US Dynamic IP": {
+      "main": [
+        [
+          {
+            "node": "Build Dynamic IP Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "active": true,
+  "id": "wa-us-dynamic-ip",
+  "tags": []
+}

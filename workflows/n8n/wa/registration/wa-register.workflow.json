@@ -1,0 +1,909 @@
+{
+  "name": "WA Register",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wa/register",
+        "responseMode": "lastNode",
+        "responseData": "firstEntryJson",
+        "options": {}
+      },
+      "id": "wa-register-start",
+      "name": "Start",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "byte-v-forge-wa-register"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst fallbackIsoByCallingCode = { '1': 'US', '20': 'EG', '44': 'GB', '49': 'DE', '55': 'BR', '62': 'ID', '63': 'PH', '65': 'SG', '66': 'TH', '84': 'VN', '90': 'TR', '91': 'IN', '92': 'PK', '212': 'MA', '234': 'NG', '971': 'AE' };\nfunction digits(value) { return String(value || '').replace(/\\D+/g, ''); }\nfunction clean(value) { return String(value || '').trim(); }\nfunction upper(value) { return clean(value).toUpperCase(); }\nfunction inferCountryFromDigits(value) {\n  const number = digits(value);\n  let best = { cc: '', iso: '' };\n  for (const [cc, iso] of Object.entries(fallbackIsoByCallingCode)) {\n    if (number.startsWith(cc) && cc.length > best.cc.length) best = { cc, iso };\n  }\n  return best;\n}\nconst body = $json.body || $json;\nconst phoneInput = (body.phone && typeof body.phone === 'object') ? body.phone : {};\nconst rawCountryCode = clean(body.country_code);\nconst countryCodeIsCalling = /^\\+?\\d+$/.test(rawCountryCode);\nlet cc = clean(phoneInput.country_calling_code || body.country_calling_code || body.cc || (countryCodeIsCalling ? rawCountryCode : '')).replace(/^\\+/, '');\nconst rawNational = phoneInput.national_number || body.national_number || (typeof body.phone === 'string' ? body.phone : '') || body.number || '';\nlet national = digits(rawNational);\nlet e164 = clean(phoneInput.e164_number || body.e164_number || '');\nif (!e164 && clean(rawNational).startsWith('+')) e164 = clean(rawNational);\nif (!e164 && cc && national) e164 = `+${cc}${national}`;\nif (e164 && !e164.startsWith('+')) e164 = `+${digits(e164)}`;\nconst inferred = e164.startsWith('+') ? inferCountryFromDigits(e164) : { cc, iso: fallbackIsoByCallingCode[cc] || '' };\nif (!cc && inferred.cc) cc = inferred.cc;\nif (e164.startsWith('+') && cc) national = digits(e164).slice(cc.length);\nconst regionCodeCountry = clean(body.region_code).includes('-') ? '' : body.region_code;\nconst countryIso = upper(phoneInput.country_iso2 || body.country_iso2 || body.country_region || regionCodeCountry || (!countryCodeIsCalling ? rawCountryCode : '') || inferred.iso || fallbackIsoByCallingCode[cc] || 'US');\nconst workspaceID = body.workspace_id || 'default';\nconst jobID = body.job_id || $execution.id;\nreturn [{ json: {\n  workspace_id: workspaceID,\n  job_id: jobID,\n  request_id: body.request_id || $execution.id,\n  actor_id: body.actor_id || '',\n  country_calling_code: cc,\n  country_code: cc,\n  country_iso2: countryIso,\n  country_region: countryIso,\n  region: countryIso,\n  phone: { e164_number: e164, country_calling_code: cc, national_number: national, country_iso2: countryIso },\n  include_transient_fingerprint: true,\n  purpose: 'WA_REGISTRATION',\n} }];\n"
+      },
+      "id": "wa-register-normalize",
+      "name": "Normalize Registration Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "wa-number-sms-probe"
+      },
+      "id": "wa-register-probe",
+      "name": "Run Number SMS Probe",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "probe-passed",
+              "leftValue": "={{ $json.passed === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "wa-register-probe-ok",
+      "name": "Probe Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WA_ACTION_API_BASE_URL + '/fingerprints/commit' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { workspace_id: $('Normalize Registration Input').first().json.workspace_id, job_id: $('Normalize Registration Input').first().json.job_id, phone: $('Normalize Registration Input').first().json.phone, transient_fingerprint_ref: $json.transient_fingerprint_ref, fingerprint: $json.fingerprint } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wa-register-commit-fp",
+      "name": "Commit Fingerprint To Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WA_ACTION_API_BASE_URL + '/registration/request-sms-otp' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { workspace_id: $('Normalize Registration Input').first().json.workspace_id, job_id: $('Normalize Registration Input').first().json.job_id, phone: $('Normalize Registration Input').first().json.phone, wa_account_id: ($json.body || $json).wa_account_id, client_profile_id: ($json.body || $json).client_profile_id, protocol_profile_id: ($json.body || $json).protocol_profile_id, proxy: $('Run WA US Dynamic IP').first().json, proxy_url: $('Run WA US Dynamic IP').first().json.proxy_url || '' } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wa-register-request-otp",
+      "name": "Request SMS OTP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "otp-requested",
+              "leftValue": "={{ ['VERIFICATION_REQUEST_STATUS_SENT','VERIFICATION_REQUEST_STATUS_WAITING','SENT','WAITING','ok','sent'].includes(($json.body || $json).status || ($json.body || $json).verification_request?.status || '') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "wa-register-otp-requested",
+      "name": "OTP Requested?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1680,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WA_ACTION_API_BASE_URL + '/registration/await-otp' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { workspace_id: $('Normalize Registration Input').first().json.workspace_id, job_id: $('Normalize Registration Input').first().json.job_id, phone: $('Normalize Registration Input').first().json.phone, verification_request_id: (($('Request SMS OTP').first().json.body || $('Request SMS OTP').first().json).verification_request_id || (($('Request SMS OTP').first().json.body || $('Request SMS OTP').first().json).verification_request || {}).verification_request_id || ''), timeout_seconds: 300, resume_url: $execution.resumeUrl } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wa-register-await-otp",
+      "name": "Register OTP Resume URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1920,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "httpMethod": "POST",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 5,
+        "resumeUnit": "minutes",
+        "options": {}
+      },
+      "id": "wa-register-wait-otp",
+      "name": "Wait For OTP Event",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2160,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst event = $json.body || $json;\nconst code = String(event.otp || event.code || event.verification_code || '').trim();\nreturn [{ json: { otp_received: Boolean(code), verification_code: code, raw_event: event } }];\n"
+      },
+      "id": "wa-register-normalize-otp",
+      "name": "Normalize OTP Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "otp-received",
+              "leftValue": "={{ $json.otp_received === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "wa-register-otp-received",
+      "name": "OTP Received?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WA_ACTION_API_BASE_URL + '/registration/submit-otp' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { workspace_id: $('Normalize Registration Input').first().json.workspace_id, job_id: $('Normalize Registration Input').first().json.job_id, verification_request_id: (($('Request SMS OTP').first().json.body || $('Request SMS OTP').first().json).verification_request_id || ''), code: $('Normalize OTP Event').first().json.otp, proxy: $('Run WA US Dynamic IP').first().json, proxy_url: $('Run WA US Dynamic IP').first().json.proxy_url || '' } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wa-register-submit-otp",
+      "name": "Submit SMS OTP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2880,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WA_ACTION_API_BASE_URL + '/registration/persist-login-state' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { workspace_id: $('Normalize Registration Input').first().json.workspace_id, job_id: $('Normalize Registration Input').first().json.job_id, registration: ($json.body || $json), client_profile_id: (($('Commit Fingerprint To Profile').first().json.body || $('Commit Fingerprint To Profile').first().json).client_profile_id || '') } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wa-register-persist-login",
+      "name": "Persist Login State",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3120,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst persist = $input.first().json.body || $input.first().json || {};\nconst submit = $('Submit SMS OTP').first().json.body || $('Submit SMS OTP').first().json || {};\nconst registration = submit.registration || submit;\nconst loginState = persist.login_state || submit.login_state || {};\nconst submitStatus = registration.status || submit.status || '';\nconst submitOK = submit.success === true || ['REGISTRATION_STATUS_REGISTERED','REGISTERED','registered'].includes(submitStatus);\nconst persistOK = persist.success === true && ['LOGIN_STATE_STATUS_ACTIVE','ACTIVE','active'].includes(loginState.status || persist.status || '');\nconst ok = submitOK && persistOK;\nconst status = ok ? 'REGISTERED' : (submitOK ? 'LOGIN_STATE_PERSIST_FAILED' : 'OTP_SUBMIT_FAILED');\nconst message = ok ? '' : (persist.error_message || submit.error_message || persist.error?.message || submit.error?.message || 'registration login state is not active');\nconst proxy = { proxy_mode: 'US_RANDOM_DYNAMIC_IP', country_code: 'US' };\nreturn [{ json: { success: ok, status, error_message: message, phone: $('Normalize Registration Input').first().json.phone, wa_account_id: (($('Commit Fingerprint To Profile').first().json.body || $('Commit Fingerprint To Profile').first().json).wa_account_id || ''), client_profile_id: (($('Commit Fingerprint To Profile').first().json.body || $('Commit Fingerprint To Profile').first().json).client_profile_id || ''), registration, login_state: loginState, proxy } }];\n"
+      },
+      "id": "wa-register-success",
+      "name": "Build Registration Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3360,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst probe = $('Run Number SMS Probe').first().json;\nreturn [{ json: { success: false, status: 'PRECHECK_FAILED', error_message: probe.error_message || 'number precheck failed', phone: $('Normalize Registration Input').first().json.phone, phone_status: probe.phone_status || {}, proxy: probe.proxy || {} } }];\n"
+      },
+      "id": "wa-register-probe-failed",
+      "name": "Build Probe Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst response = $('Request SMS OTP').first().json.body || $('Request SMS OTP').first().json || {};\nreturn [{ json: { success: false, status: 'OTP_REQUEST_FAILED', error_message: response.error_message || response.error?.message || 'sms otp request failed', phone: $('Normalize Registration Input').first().json.phone, data: response } }];\n"
+      },
+      "id": "wa-register-otp-request-failed",
+      "name": "Build OTP Request Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nreturn [{ json: { success: false, status: 'OTP_TIMEOUT', error_message: 'otp was not provided before wait timeout', phone: $('Normalize Registration Input').first().json.phone } }];\n"
+      },
+      "id": "wa-register-otp-timeout",
+      "name": "Build OTP Timeout",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nreturn [{ json: $('Build Registration Success').first().json }];\n"
+      },
+      "id": "wa-register-return-success",
+      "name": "Return Registration Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4000,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nreturn [{ json: $('Build Probe Failure').first().json }];\n"
+      },
+      "id": "wa-register-return-probe-failure",
+      "name": "Return Probe Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nreturn [{ json: $('Build OTP Request Failure').first().json }];\n"
+      },
+      "id": "wa-register-return-otp-request-failure",
+      "name": "Return OTP Request Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nreturn [{ json: $('Build OTP Timeout').first().json }];\n"
+      },
+      "id": "wa-register-return-otp-timeout",
+      "name": "Return OTP Timeout",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3600,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "wa-us-dynamic-ip"
+      },
+      "id": "wa-register-us-dynamic-ip",
+      "name": "Run WA US Dynamic IP",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        960,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "dynamic-ip-ready",
+              "leftValue": "={{ $json.accepted === true && !!$json.proxy_url }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "wa-register-dynamic-ip-ok",
+      "name": "Dynamic IP Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1080,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst proxy = $('Run WA US Dynamic IP').first().json || {};\nreturn [{ json: { success: false, status: 'US_DYNAMIC_IP_UNAVAILABLE', error_message: proxy.error_message || 'US random dynamic IP unavailable', phone: $('Normalize Registration Input').first().json.phone, proxy: { proxy_mode: 'US_RANDOM_DYNAMIC_IP', country_code: 'US' } } }];\n"
+      },
+      "id": "wa-register-dynamic-ip-failure",
+      "name": "Build Dynamic IP Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.PROXY_RUNTIME_API_BASE_URL + '/leases/release' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { account_id: $('Run WA US Dynamic IP').first().json.account_id || '' } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wa-register-release-dynamic-ip",
+      "name": "Release Registration Dynamic IP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3600,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.PROXY_RUNTIME_API_BASE_URL + '/leases/release' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { account_id: $('Run WA US Dynamic IP').first().json.account_id || '' } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wa-register-release-dynamic-ip-otp-failure",
+      "name": "Release Registration Dynamic IP After OTP Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.PROXY_RUNTIME_API_BASE_URL + '/leases/release' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { account_id: $('Run WA US Dynamic IP').first().json.account_id || '' } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wa-register-release-dynamic-ip-timeout",
+      "name": "Release Registration Dynamic IP After Timeout",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3120,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.PROXY_RUNTIME_API_BASE_URL + '/leases/release' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { account_id: $('Run WA US Dynamic IP').first().json.account_id || '' } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "release-registration-dynamic-ip-after-acquire-failure",
+      "name": "Release Registration Dynamic IP After Acquire Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2260,
+        860
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nreturn [{ json: $('Build Dynamic IP Failure').first().json }];\n"
+      },
+      "id": "return-dynamic-ip-failure",
+      "name": "Return Dynamic IP Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2500,
+        860
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Normalize Registration Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Registration Input": {
+      "main": [
+        [
+          {
+            "node": "Run Number SMS Probe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Number SMS Probe": {
+      "main": [
+        [
+          {
+            "node": "Probe Passed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Probe Passed?": {
+      "main": [
+        [
+          {
+            "node": "Run WA US Dynamic IP",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Probe Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Commit Fingerprint To Profile": {
+      "main": [
+        [
+          {
+            "node": "Request SMS OTP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request SMS OTP": {
+      "main": [
+        [
+          {
+            "node": "OTP Requested?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OTP Requested?": {
+      "main": [
+        [
+          {
+            "node": "Register OTP Resume URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build OTP Request Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Register OTP Resume URL": {
+      "main": [
+        [
+          {
+            "node": "Wait For OTP Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait For OTP Event": {
+      "main": [
+        [
+          {
+            "node": "Normalize OTP Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize OTP Event": {
+      "main": [
+        [
+          {
+            "node": "OTP Received?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OTP Received?": {
+      "main": [
+        [
+          {
+            "node": "Submit SMS OTP",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build OTP Timeout",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit SMS OTP": {
+      "main": [
+        [
+          {
+            "node": "Persist Login State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Login State": {
+      "main": [
+        [
+          {
+            "node": "Build Registration Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Registration Success": {
+      "main": [
+        [
+          {
+            "node": "Release Registration Dynamic IP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Probe Failure": {
+      "main": [
+        [
+          {
+            "node": "Return Probe Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build OTP Request Failure": {
+      "main": [
+        [
+          {
+            "node": "Release Registration Dynamic IP After OTP Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build OTP Timeout": {
+      "main": [
+        [
+          {
+            "node": "Release Registration Dynamic IP After Timeout",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run WA US Dynamic IP": {
+      "main": [
+        [
+          {
+            "node": "Dynamic IP Ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dynamic IP Ready?": {
+      "main": [
+        [
+          {
+            "node": "Commit Fingerprint To Profile",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Dynamic IP Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Dynamic IP Failure": {
+      "main": [
+        [
+          {
+            "node": "Release Registration Dynamic IP After Acquire Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release Registration Dynamic IP": {
+      "main": [
+        [
+          {
+            "node": "Return Registration Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release Registration Dynamic IP After OTP Failure": {
+      "main": [
+        [
+          {
+            "node": "Return OTP Request Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release Registration Dynamic IP After Timeout": {
+      "main": [
+        [
+          {
+            "node": "Return OTP Timeout",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release Registration Dynamic IP After Acquire Failure": {
+      "main": [
+        [
+          {
+            "node": "Return Dynamic IP Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "active": true,
+  "id": "wa-register",
+  "tags": []
+}

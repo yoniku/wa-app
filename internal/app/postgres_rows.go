@@ -1,0 +1,347 @@
+package app
+
+import (
+	"database/sql"
+	"time"
+
+	waappv1 "github.com/byte-v-forge/wa-app/gen/go/byte/v/forge/waapp/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+func protocolCapabilities(values []waappv1.ProtocolCapability) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != waappv1.ProtocolCapability_PROTOCOL_CAPABILITY_UNSPECIFIED {
+			out = append(out, value.String())
+		}
+	}
+	return out
+}
+
+func registrationFlows(values []waappv1.RegistrationFlowKind) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != waappv1.RegistrationFlowKind_REGISTRATION_FLOW_KIND_UNSPECIFIED {
+			out = append(out, value.String())
+		}
+	}
+	return out
+}
+
+func messageTransports(values []waappv1.MessageTransportKind) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != waappv1.MessageTransportKind_MESSAGE_TRANSPORT_KIND_UNSPECIFIED {
+			out = append(out, value.String())
+		}
+	}
+	return out
+}
+
+func deliveryMethods(values []waappv1.VerificationDeliveryMethod) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != waappv1.VerificationDeliveryMethod_VERIFICATION_DELIVERY_METHOD_UNSPECIFIED {
+			out = append(out, value.String())
+		}
+	}
+	return out
+}
+
+func parseProtocolCapabilities(values []string) []waappv1.ProtocolCapability {
+	out := make([]waappv1.ProtocolCapability, 0, len(values))
+	for _, value := range values {
+		out = append(out, waappv1.ProtocolCapability(waappv1.ProtocolCapability_value[value]))
+	}
+	return out
+}
+
+func parseRegistrationFlows(values []string) []waappv1.RegistrationFlowKind {
+	out := make([]waappv1.RegistrationFlowKind, 0, len(values))
+	for _, value := range values {
+		out = append(out, waappv1.RegistrationFlowKind(waappv1.RegistrationFlowKind_value[value]))
+	}
+	return out
+}
+
+func parseMessageTransports(values []string) []waappv1.MessageTransportKind {
+	out := make([]waappv1.MessageTransportKind, 0, len(values))
+	for _, value := range values {
+		out = append(out, waappv1.MessageTransportKind(waappv1.MessageTransportKind_value[value]))
+	}
+	return out
+}
+
+func parseDeliveryMethods(values []string) []waappv1.VerificationDeliveryMethod {
+	out := make([]waappv1.VerificationDeliveryMethod, 0, len(values))
+	for _, value := range values {
+		out = append(out, waappv1.VerificationDeliveryMethod(waappv1.VerificationDeliveryMethod_value[value]))
+	}
+	return out
+}
+
+type protocolProfileRow struct {
+	id                string
+	artifactID        string
+	displayName       string
+	appVersion        string
+	status            string
+	capabilities      []string
+	registrationFlows []string
+	messageTransports []string
+	discoveredAt      time.Time
+	createdAt         time.Time
+	updatedAt         time.Time
+}
+
+func (r protocolProfileRow) toProto() *waappv1.ProtocolProfile {
+	return &waappv1.ProtocolProfile{
+		ProtocolProfileId: r.id,
+		AppArtifactId:     r.artifactID,
+		DisplayName:       r.displayName,
+		AppVersion:        r.appVersion,
+		Status:            waappv1.ProtocolProfileStatus(waappv1.ProtocolProfileStatus_value[r.status]),
+		Capabilities:      parseProtocolCapabilities(r.capabilities),
+		RegistrationFlows: parseRegistrationFlows(r.registrationFlows),
+		MessageTransports: parseMessageTransports(r.messageTransports),
+		DiscoveredAt:      timestamppb.New(r.discoveredAt.UTC()),
+		Audit:             audit(r.createdAt, r.updatedAt),
+	}
+}
+
+type waAccountRow struct {
+	id          string
+	workspaceID string
+	e164        string
+	cc          string
+	national    string
+	iso2        string
+	status      string
+	createdAt   time.Time
+	updatedAt   time.Time
+}
+
+func (r waAccountRow) toProto() *waappv1.WAAccount {
+	return newWAAccount(r.id, r.workspaceID, &waappv1.PhoneTarget{
+		E164Number:         r.e164,
+		CountryCallingCode: r.cc,
+		NationalNumber:     r.national,
+		CountryIso2:        r.iso2,
+	}, waappv1.WAAccountStatus(waappv1.WAAccountStatus_value[r.status]), audit(r.createdAt, r.updatedAt))
+}
+
+type clientProfileRow struct {
+	id                   string
+	waAccountIDValue     string
+	protocolProfileID    string
+	status               string
+	registrationKeyState string
+	messagingKeyState    string
+	errCode              string
+	errMessage           string
+	errRetryable         bool
+	lastUsedAt           sql.NullTime
+	createdAt            time.Time
+	updatedAt            time.Time
+}
+
+func (r clientProfileRow) toProto() *waappv1.ClientProfile {
+	return &waappv1.ClientProfile{
+		ClientProfileId:      r.id,
+		WaAccountId:          r.waAccountIDValue,
+		ProtocolProfileId:    r.protocolProfileID,
+		Status:               waappv1.ClientProfileStatus(waappv1.ClientProfileStatus_value[r.status]),
+		RegistrationKeyState: waappv1.KeyMaterialStatus(waappv1.KeyMaterialStatus_value[r.registrationKeyState]),
+		MessagingKeyState:    waappv1.KeyMaterialStatus(waappv1.KeyMaterialStatus_value[r.messagingKeyState]),
+		LastUsedAt:           sqlTime(r.lastUsedAt),
+		Audit:                audit(r.createdAt, r.updatedAt),
+		LastError:            protoError(r.errCode, r.errMessage, r.errRetryable),
+	}
+}
+
+type verificationRow struct {
+	id               string
+	waAccountIDValue string
+	clientProfileID  string
+	method           string
+	status           string
+	length           int32
+	errCode          string
+	errMessage       string
+	errRetryable     bool
+	requestedAt      time.Time
+	expiresAt        sql.NullTime
+}
+
+func (r verificationRow) toProto() *waappv1.VerificationCodeRequestRecord {
+	return &waappv1.VerificationCodeRequestRecord{
+		VerificationRequestId: r.id,
+		WaAccountId:           r.waAccountIDValue,
+		ClientProfileId:       r.clientProfileID,
+		DeliveryMethod:        waappv1.VerificationDeliveryMethod(waappv1.VerificationDeliveryMethod_value[r.method]),
+		Status:                waappv1.VerificationRequestStatus(waappv1.VerificationRequestStatus_value[r.status]),
+		ExpectedCodeLength:    r.length,
+		RequestedAt:           timestamppb.New(r.requestedAt.UTC()),
+		ExpiresAt:             sqlTime(r.expiresAt),
+		LastError:             protoError(r.errCode, r.errMessage, r.errRetryable),
+	}
+}
+
+type registrationRow struct {
+	id                    string
+	verificationRequestID string
+	waAccountIDValue      string
+	clientProfileID       string
+	status                string
+	identityID            string
+	serviceAccountID      string
+	serviceLoginID        string
+	errCode               string
+	errMessage            string
+	errRetryable          bool
+	submittedAt           time.Time
+	completedAt           sql.NullTime
+}
+
+func (r registrationRow) toProto() *waappv1.RegistrationRecord {
+	var identity *waappv1.RegisteredIdentity
+	if r.identityID != "" {
+		identity = &waappv1.RegisteredIdentity{
+			RegisteredIdentityId: r.identityID,
+			WaAccountId:          r.waAccountIDValue,
+			ClientProfileId:      r.clientProfileID,
+			ServiceAccountId:     r.serviceAccountID,
+			ServiceLoginId:       r.serviceLoginID,
+			RegisteredAt:         sqlTime(r.completedAt),
+		}
+	}
+	return &waappv1.RegistrationRecord{
+		RegistrationId:        r.id,
+		VerificationRequestId: r.verificationRequestID,
+		WaAccountId:           r.waAccountIDValue,
+		ClientProfileId:       r.clientProfileID,
+		Status:                waappv1.RegistrationStatus(waappv1.RegistrationStatus_value[r.status]),
+		Identity:              identity,
+		SubmittedAt:           timestamppb.New(r.submittedAt.UTC()),
+		CompletedAt:           sqlTime(r.completedAt),
+		LastError:             protoError(r.errCode, r.errMessage, r.errRetryable),
+	}
+}
+
+type loginStateRow struct {
+	id                   string
+	registrationID       string
+	waAccountIDValue     string
+	clientProfileID      string
+	registeredIdentityID string
+	serviceAccountID     string
+	serviceLoginID       string
+	status               string
+	errCode              string
+	errMessage           string
+	errRetryable         bool
+	registeredAt         time.Time
+	lastVerifiedAt       sql.NullTime
+	createdAt            time.Time
+	updatedAt            time.Time
+}
+
+func (r loginStateRow) toProto() *waappv1.LoginState {
+	return &waappv1.LoginState{
+		LoginStateId:         r.id,
+		RegistrationId:       r.registrationID,
+		WaAccountId:          r.waAccountIDValue,
+		ClientProfileId:      r.clientProfileID,
+		RegisteredIdentityId: r.registeredIdentityID,
+		ServiceAccountId:     r.serviceAccountID,
+		ServiceLoginId:       r.serviceLoginID,
+		Status:               waappv1.LoginStateStatus(waappv1.LoginStateStatus_value[r.status]),
+		RegisteredAt:         timestamppb.New(r.registeredAt.UTC()),
+		LastVerifiedAt:       sqlTime(r.lastVerifiedAt),
+		Audit:                audit(r.createdAt, r.updatedAt),
+		LastError:            protoError(r.errCode, r.errMessage, r.errRetryable),
+	}
+}
+
+type sessionRow struct {
+	id                string
+	waAccountIDValue  string
+	clientProfileID   string
+	identityID        string
+	protocolProfileID string
+	status            string
+	errCode           string
+	errMessage        string
+	errRetryable      bool
+	openedAt          time.Time
+	lastSeenAt        sql.NullTime
+	closedAt          sql.NullTime
+}
+
+func (r sessionRow) toProto() *waappv1.MessageSession {
+	return &waappv1.MessageSession{
+		MessageSessionId:     r.id,
+		WaAccountId:          r.waAccountIDValue,
+		ClientProfileId:      r.clientProfileID,
+		RegisteredIdentityId: r.identityID,
+		ProtocolProfileId:    r.protocolProfileID,
+		Status:               waappv1.MessageSessionStatus(waappv1.MessageSessionStatus_value[r.status]),
+		OpenedAt:             timestamppb.New(r.openedAt.UTC()),
+		LastSeenAt:           sqlTime(r.lastSeenAt),
+		ClosedAt:             sqlTime(r.closedAt),
+		LastError:            protoError(r.errCode, r.errMessage, r.errRetryable),
+	}
+}
+
+type messageRow struct {
+	id              string
+	sessionID       string
+	kind            string
+	encryptionState string
+	ackStatus       string
+	senderRef       string
+	payloadRef      string
+	errCode         string
+	errMessage      string
+	errRetryable    bool
+	receivedAt      time.Time
+}
+
+func (r messageRow) toProto() *waappv1.InboundMessage {
+	return &waappv1.InboundMessage{
+		MessageId:        r.id,
+		MessageSessionId: r.sessionID,
+		Kind:             waappv1.InboundMessageKind(waappv1.InboundMessageKind_value[r.kind]),
+		EncryptionState:  waappv1.MessageEncryptionState(waappv1.MessageEncryptionState_value[r.encryptionState]),
+		AckStatus:        waappv1.MessageAckStatus(waappv1.MessageAckStatus_value[r.ackStatus]),
+		SenderRef:        r.senderRef,
+		PayloadRef:       r.payloadRef,
+		ReceivedAt:       timestamppb.New(r.receivedAt.UTC()),
+		LastError:        protoError(r.errCode, r.errMessage, r.errRetryable),
+	}
+}
+
+type decryptedRow struct {
+	id           string
+	messageID    string
+	status       string
+	plaintextRef string
+	redacted     string
+	secretRef    string
+	errCode      string
+	errMessage   string
+	errRetryable bool
+	decryptedAt  time.Time
+}
+
+func (r decryptedRow) toProto() *waappv1.DecryptedMessage {
+	return &waappv1.DecryptedMessage{
+		DecryptedMessageId: r.id,
+		MessageId:          r.messageID,
+		Status:             waappv1.DecryptionStatus(waappv1.DecryptionStatus_value[r.status]),
+		PlaintextRef:       r.plaintextRef,
+		PlaintextText:      &waappv1.SensitiveText{RedactedValue: r.redacted, SecretRef: r.secretRef},
+		DecryptedAt:        timestamppb.New(r.decryptedAt.UTC()),
+		LastError:          protoError(r.errCode, r.errMessage, r.errRetryable),
+	}
+}

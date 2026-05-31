@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package byte.v.forge.waapp.v1;
+
+import "byte/v/forge/waapp/v1/common.proto";
+import "byte/v/forge/contracts/account/v1/account.proto";
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "ByteVForge.WaApp.V1";
+option go_package = "github.com/byte-v-forge/wa-app/gen/go/byte/v/forge/waapp/v1;waappv1";
+option java_multiple_files = true;
+option java_outer_classname = "WaAppProfileProto";
+option java_package = "com.bytevforge.waapp.v1";
+option php_namespace = "ByteVForge\\WaApp\\V1";
+
+service WaProfileService {
+  rpc CreateWAAccount(CreateWAAccountRequest) returns (CreateWAAccountResponse);
+  rpc GetWAAccount(GetWAAccountRequest) returns (GetWAAccountResponse);
+  rpc ListWAAccounts(ListWAAccountsRequest) returns (ListWAAccountsResponse);
+  rpc PrepareClientProfile(PrepareClientProfileRequest) returns (PrepareClientProfileResponse);
+  rpc GetClientProfile(GetClientProfileRequest) returns (GetClientProfileResponse);
+  rpc RetireClientProfile(RetireClientProfileRequest) returns (RetireClientProfileResponse);
+}
+
+enum WAAccountStatus {
+  WA_ACCOUNT_STATUS_UNSPECIFIED = 0;
+  WA_ACCOUNT_STATUS_ACTIVE = 1;
+  WA_ACCOUNT_STATUS_PAUSED = 2;
+  WA_ACCOUNT_STATUS_ARCHIVED = 3;
+}
+
+enum ClientProfileStatus {
+  CLIENT_PROFILE_STATUS_UNSPECIFIED = 0;
+  CLIENT_PROFILE_STATUS_PREPARING = 1;
+  CLIENT_PROFILE_STATUS_READY = 2;
+  CLIENT_PROFILE_STATUS_REJECTED = 3;
+  CLIENT_PROFILE_STATUS_RETIRED = 4;
+}
+
+enum KeyMaterialStatus {
+  KEY_MATERIAL_STATUS_UNSPECIFIED = 0;
+  KEY_MATERIAL_STATUS_PENDING = 1;
+  KEY_MATERIAL_STATUS_READY = 2;
+  KEY_MATERIAL_STATUS_INVALID = 3;
+  KEY_MATERIAL_STATUS_ROTATED = 4;
+}
+
+message WAAccount {
+  byte.v.forge.contracts.account.v1.Account account = 1;
+  string workspace_id = 2;
+  PhoneTarget phone = 3;
+  reserved 4, 5;
+  reserved "status", "audit";
+}
+
+message ClientProfile {
+  string client_profile_id = 1;
+  string wa_account_id = 2;
+  string protocol_profile_id = 3;
+  ClientProfileStatus status = 4;
+  KeyMaterialStatus registration_key_state = 5;
+  KeyMaterialStatus messaging_key_state = 6;
+  google.protobuf.Timestamp last_used_at = 7;
+  AuditStamp audit = 8;
+  WaError last_error = 9;
+}
+
+message CreateWAAccountRequest {
+  RequestContext context = 1;
+  PhoneTarget phone = 2;
+}
+
+message CreateWAAccountResponse {
+  WAAccount account = 1;
+  WaError error = 2;
+}
+
+message GetWAAccountRequest {
+  RequestContext context = 1;
+  string wa_account_id = 2;
+}
+
+message GetWAAccountResponse {
+  WAAccount account = 1;
+  WaError error = 2;
+}
+
+message ListWAAccountsRequest {
+  RequestContext context = 1;
+  int32 limit = 2;
+  string cursor = 3;
+}
+
+message ListWAAccountsResponse {
+  repeated WAAccount accounts = 1;
+  WaError error = 2;
+  string next_cursor = 3;
+}
+
+message PrepareClientProfileRequest {
+  RequestContext context = 1;
+  string wa_account_id = 2;
+  string protocol_profile_id = 3;
+}
+
+message PrepareClientProfileResponse {
+  ClientProfile client_profile = 1;
+  WaError error = 2;
+}
+
+message GetClientProfileRequest {
+  RequestContext context = 1;
+  string client_profile_id = 2;
+}
+
+message GetClientProfileResponse {
+  ClientProfile client_profile = 1;
+  WaError error = 2;
+}
+
+message RetireClientProfileRequest {
+  RequestContext context = 1;
+  string client_profile_id = 2;
+  string reason = 3;
+}
+
+message RetireClientProfileResponse {
+  ClientProfile client_profile = 1;
+  WaError error = 2;
+}

@@ -1,0 +1,431 @@
+{
+  "name": "WA Number SMS Probe",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wa/number-sms-probe",
+        "responseMode": "lastNode",
+        "responseData": "firstEntryJson",
+        "options": {}
+      },
+      "id": "wa-probe-start",
+      "name": "Start",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "byte-v-forge-wa-number-sms-probe"
+    },
+    {
+      "parameters": {},
+      "id": "wa-probe-execute-trigger",
+      "name": "When Executed by WA Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst fallbackIsoByCallingCode = { '1': 'US', '20': 'EG', '44': 'GB', '49': 'DE', '55': 'BR', '62': 'ID', '63': 'PH', '65': 'SG', '66': 'TH', '84': 'VN', '90': 'TR', '91': 'IN', '92': 'PK', '212': 'MA', '234': 'NG', '971': 'AE' };\nfunction digits(value) { return String(value || '').replace(/\\D+/g, ''); }\nfunction clean(value) { return String(value || '').trim(); }\nfunction upper(value) { return clean(value).toUpperCase(); }\nfunction inferCountryFromDigits(value) {\n  const number = digits(value);\n  let best = { cc: '', iso: '' };\n  for (const [cc, iso] of Object.entries(fallbackIsoByCallingCode)) {\n    if (number.startsWith(cc) && cc.length > best.cc.length) best = { cc, iso };\n  }\n  return best;\n}\nconst body = $json.body || $json;\nconst phoneInput = (body.phone && typeof body.phone === 'object') ? body.phone : {};\nconst rawCountryCode = clean(body.country_code);\nconst countryCodeIsCalling = /^\\+?\\d+$/.test(rawCountryCode);\nlet cc = clean(phoneInput.country_calling_code || body.country_calling_code || body.cc || (countryCodeIsCalling ? rawCountryCode : '')).replace(/^\\+/, '');\nconst rawNational = phoneInput.national_number || body.national_number || (typeof body.phone === 'string' ? body.phone : '') || body.number || '';\nlet national = digits(rawNational);\nlet e164 = clean(phoneInput.e164_number || body.e164_number || '');\nif (!e164 && clean(rawNational).startsWith('+')) e164 = clean(rawNational);\nif (!e164 && cc && national) e164 = `+${cc}${national}`;\nif (e164 && !e164.startsWith('+')) e164 = `+${digits(e164)}`;\nconst inferred = e164.startsWith('+') ? inferCountryFromDigits(e164) : { cc, iso: fallbackIsoByCallingCode[cc] || '' };\nif (!cc && inferred.cc) cc = inferred.cc;\nif (e164.startsWith('+') && cc) national = digits(e164).slice(cc.length);\nconst regionCodeCountry = clean(body.region_code).includes('-') ? '' : body.region_code;\nconst countryIso = upper(phoneInput.country_iso2 || body.country_iso2 || body.country_region || regionCodeCountry || (!countryCodeIsCalling ? rawCountryCode : '') || inferred.iso || fallbackIsoByCallingCode[cc] || 'US');\nconst workspaceID = body.workspace_id || 'default';\nconst jobID = body.job_id || $execution.id;\nreturn [{ json: {\n  workspace_id: workspaceID,\n  job_id: jobID,\n  request_id: body.request_id || $execution.id,\n  actor_id: body.actor_id || '',\n  country_calling_code: cc,\n  country_code: cc,\n  country_iso2: countryIso,\n  country_region: countryIso,\n  region: countryIso,\n  phone: { e164_number: e164, country_calling_code: cc, national_number: national, country_iso2: countryIso },\n  include_transient_fingerprint: body.include_transient_fingerprint !== false,\n  purpose: clean(body.proxy_purpose || body.purpose || 'WA_NUMBER_SMS_PROBE'),\n} }];\n"
+      },
+      "id": "wa-probe-normalize",
+      "name": "Normalize Probe Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WA_ACTION_API_BASE_URL + '/fingerprints/random' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { workspace_id: $('Normalize Probe Input').first().json.workspace_id, job_id: $('Normalize Probe Input').first().json.job_id, phone: $('Normalize Probe Input').first().json.phone, persist: false, proxy: $('Run WA US Dynamic IP').first().json } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wa-probe-fingerprint",
+      "name": "Generate Transient Fingerprint",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WA_ACTION_API_BASE_URL + '/number-probe/account' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { workspace_id: $('Normalize Probe Input').first().json.workspace_id, job_id: $('Normalize Probe Input').first().json.job_id, phone: $('Normalize Probe Input').first().json.phone, proxy: $('Run WA US Dynamic IP').first().json, proxy_url: $('Run WA US Dynamic IP').first().json.proxy_url || '', fingerprint_ref: ($json.body || $json).fingerprint_ref || ($json.body || $json).transient_fingerprint_ref || '', fingerprint: ($json.body || $json).fingerprint || {} } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wa-probe-account",
+      "name": "Probe Number Account",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WA_ACTION_API_BASE_URL + '/number-probe/sms' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { workspace_id: $('Normalize Probe Input').first().json.workspace_id, job_id: $('Normalize Probe Input').first().json.job_id, phone: $('Normalize Probe Input').first().json.phone, proxy: $('Run WA US Dynamic IP').first().json, proxy_url: $('Run WA US Dynamic IP').first().json.proxy_url || '', fingerprint_ref: (($('Generate Transient Fingerprint').first().json.body || $('Generate Transient Fingerprint').first().json).fingerprint_ref || ($('Generate Transient Fingerprint').first().json.body || $('Generate Transient Fingerprint').first().json).transient_fingerprint_ref || ''), account_probe: ($('Probe Number Account').first().json.body || $('Probe Number Account').first().json) } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wa-probe-sms",
+      "name": "Probe SMS Route",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst input = $('Normalize Probe Input').first().json;\nconst dynamicProxy = $('Run WA US Dynamic IP').first().json || {};\nconst proxy = { proxy_mode: 'US_RANDOM_DYNAMIC_IP', country_code: 'US' };\nconst fpResp = $('Generate Transient Fingerprint').first().json; const fingerprint = fpResp.body || fpResp || {};\nconst accountResp = $('Probe Number Account').first().json; const account = accountResp.body || accountResp || {};\nconst smsResp = $('Probe SMS Route').first().json; const sms = smsResp.body || smsResp || {};\nconst accountStatus = account.status || account.account_status || account.probe?.status || 'UNKNOWN';\nconst smsStatus = sms.status || sms.sms_status || sms.route_status || 'UNKNOWN';\nconst accountReachable = ['REACHABLE','ACCOUNT_PROBE_STATUS_REACHABLE','OK','ok','sent'].includes(accountStatus);\nconst smsAvailable = ['AVAILABLE','SMS_AVAILABLE','VERIFICATION_REQUEST_STATUS_SENT','SENT','WAITING','ok','sent'].includes(smsStatus) || sms.can_send_sms === true;\nconst passed = dynamicProxy.accepted === true && accountReachable && smsAvailable;\nreturn [{ json: { success: passed, passed, error_message: passed ? '' : 'number or sms route probe rejected', phone: input.phone, proxy, fingerprint_persistence: 'TRANSIENT_NOT_COMMITTED', transient_fingerprint_ref: fingerprint.fingerprint_ref || fingerprint.transient_fingerprint_ref || '', fingerprint: input.include_transient_fingerprint ? (fingerprint.fingerprint || {}) : {}, account_probe: account, sms_probe: sms, phone_status: { account_status: accountStatus, account_reachable: accountReachable, sms_status: smsStatus, sms_available: smsAvailable, can_register: passed } } }];\n"
+      },
+      "id": "wa-probe-success-result",
+      "name": "Build Probe Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nreturn [{ json: $('Build Probe Result').first().json }];\n"
+      },
+      "id": "wa-probe-return-result",
+      "name": "Return Probe Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "wa-us-dynamic-ip"
+      },
+      "id": "wa-probe-us-dynamic-ip",
+      "name": "Run WA US Dynamic IP",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "dynamic-ip-ready",
+              "leftValue": "={{ $json.accepted === true && !!$json.proxy_url }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "wa-probe-dynamic-ip-ok",
+      "name": "Dynamic IP Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        840,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst input = $('Normalize Probe Input').first().json;\nconst proxy = $('Run WA US Dynamic IP').first().json || {};\nreturn [{ json: { success: false, passed: false, error_message: proxy.error_message || 'US random dynamic IP unavailable', phone: input.phone, proxy: { proxy_mode: 'US_RANDOM_DYNAMIC_IP', country_code: 'US' }, fingerprint_persistence: 'NOT_CREATED', phone_status: { account_status: 'UNKNOWN', account_reachable: false, sms_status: 'UNKNOWN', sms_available: false, can_register: false } } }];\n"
+      },
+      "id": "wa-probe-dynamic-ip-failure",
+      "name": "Build Dynamic IP Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.PROXY_RUNTIME_API_BASE_URL + '/leases/release' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { account_id: $('Run WA US Dynamic IP').first().json.account_id || '' } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wa-probe-release-dynamic-ip",
+      "name": "Release Probe Dynamic IP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nreturn [{ json: $('Build Dynamic IP Failure').first().json }];\n"
+      },
+      "id": "wa-probe-return-dynamic-ip-failure",
+      "name": "Return Dynamic IP Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.PROXY_RUNTIME_API_BASE_URL + '/leases/release' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { account_id: $('Run WA US Dynamic IP').first().json.account_id || '' } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "release-probe-dynamic-ip-after-failure",
+      "name": "Release Probe Dynamic IP After Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1280,
+        620
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Normalize Probe Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by WA Workflow": {
+      "main": [
+        [
+          {
+            "node": "Normalize Probe Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Probe Input": {
+      "main": [
+        [
+          {
+            "node": "Run WA US Dynamic IP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run WA US Dynamic IP": {
+      "main": [
+        [
+          {
+            "node": "Dynamic IP Ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dynamic IP Ready?": {
+      "main": [
+        [
+          {
+            "node": "Generate Transient Fingerprint",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Dynamic IP Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Transient Fingerprint": {
+      "main": [
+        [
+          {
+            "node": "Probe Number Account",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Probe Number Account": {
+      "main": [
+        [
+          {
+            "node": "Probe SMS Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Probe SMS Route": {
+      "main": [
+        [
+          {
+            "node": "Build Probe Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Probe Result": {
+      "main": [
+        [
+          {
+            "node": "Release Probe Dynamic IP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release Probe Dynamic IP": {
+      "main": [
+        [
+          {
+            "node": "Return Probe Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Dynamic IP Failure": {
+      "main": [
+        [
+          {
+            "node": "Release Probe Dynamic IP After Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release Probe Dynamic IP After Failure": {
+      "main": [
+        [
+          {
+            "node": "Return Dynamic IP Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "active": true,
+  "id": "wa-number-sms-probe",
+  "tags": []
+}
