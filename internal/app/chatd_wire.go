@@ -544,7 +544,7 @@ func passiveLoginCheckPayload(identity loginIdentity, state nativeState, version
 
 func loginPayload(identity loginIdentity, state nativeState, version string, passive bool, shortConnect bool) []byte {
 	ua := userAgentConfig{
-		version:       firstNonEmpty(version, "2.26.21.73"),
+		version:       firstNonEmpty(version, defaultWAAppVersion),
 		osVersion:     "13",
 		manufacturer:  "samsung",
 		device:        "SM-G991B",

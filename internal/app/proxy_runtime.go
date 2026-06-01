@@ -38,7 +38,7 @@ func NewDynamicProxyRuntime(baseURL string, ids IDGenerator) *DynamicProxyRuntim
 	return &DynamicProxyRuntime{baseURL: baseURL, client: &http.Client{Timeout: 20 * time.Second}, ids: ids}
 }
 
-func (p *DynamicProxyRuntime) AcquireUSDynamic(ctx context.Context, purpose string, correlationID string) (DynamicProxyLease, error) {
+func (p *DynamicProxyRuntime) AcquireUSDynamic(ctx context.Context, purpose string, correlationID string, leaseTTL time.Duration) (DynamicProxyLease, error) {
 	if p == nil || p.baseURL == "" {
 		return DynamicProxyLease{}, NewError(waappv1.WaErrorCode_WA_ERROR_CODE_VALIDATION_FAILED, "PROXY_RUNTIME_API_BASE_URL is required", false)
 	}
@@ -47,6 +47,10 @@ func (p *DynamicProxyRuntime) AcquireUSDynamic(ctx context.Context, purpose stri
 		return DynamicProxyLease{}, err
 	}
 	purpose = firstNonEmpty(purpose, "WA_LONG_CONNECTION")
+	ttl := "600s"
+	if leaseTTL > 0 {
+		ttl = fmt.Sprintf("%ds", int(leaseTTL.Round(time.Second)/time.Second))
+	}
 	accountID := "wa-dynamic-" + p.ids.NewID("")
 	requestBody := map[string]any{
 		"account_id": accountID,
@@ -55,7 +59,7 @@ func (p *DynamicProxyRuntime) AcquireUSDynamic(ctx context.Context, purpose stri
 		"policy": map[string]any{
 			"mode":       "PROXY_SESSION_MODE_STICKY",
 			"region":     "US",
-			"sticky_ttl": "600s",
+			"sticky_ttl": ttl,
 			"labels": map[string]string{
 				"country_code": "US",
 				"correlation":  correlationID,
@@ -65,9 +69,9 @@ func (p *DynamicProxyRuntime) AcquireUSDynamic(ctx context.Context, purpose stri
 			"country_code":                 "US",
 			"purpose":                      purpose,
 			"strategy":                     "PROXY_CHAIN_STRATEGY_REGION_AWARE",
-			"max_attempts":                 1,
+			"max_attempts":                 3,
 			"allow_direct_dynamic_gateway": true,
-			"prefer_line_proxy":            false,
+			"prefer_line_proxy":            true,
 		},
 	}
 	data, _ := json.Marshal(requestBody)

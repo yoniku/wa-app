@@ -105,17 +105,16 @@ Go 原生实现关系：
 
 ## 8. n8n 编排边界
 
-当前 WA 编排只保留两条业务工作流：
+当前 WA 编排只保留注册相关工作流；号码探测不进入 n8n，由 wa-app BFF 直连原子能力：
 
-- `WA Number SMS Probe`：根据号码确定号码国家，生成临时随机指纹并执行号码检测与 SMS 可发送性检测；该阶段只返回 `transient_fingerprint_ref` 和号码状态，不提交长期 profile。
-- `WA Register`：入参为号码国家/拨号码和号码；先调用检测工作流，检测通过后把同一个临时指纹提交为该号码设备指纹，再发起 SMS OTP、等待 n8n resume URL 回调、提交 OTP，并持久化注册成功后的登录态引用。
+- `WA Register`：入参为号码国家/拨号码和号码；申请动态 IP，生成注册用随机指纹并提交为该号码设备指纹，再发起 SMS OTP、等待 n8n resume URL 回调、提交 OTP，并持久化注册成功后的登录态引用。
 - 登录态持久化失败时注册工作流不得返回成功；`SubmitVerificationCode` 会创建 `LoginState`，`persist-login-state` 只做幂等确认和摘要返回。
 - `CheckLoginState`：不进入 n8n。根据 `app-release-re` 中 chatd login payload 的 `passive` / `short_connect` 以及 `last_heartbeat_login`、`wamo_heartbeat` 逆向线索，用原生 chatd 被动短连接握手检测远端登录态。成功刷新 `last_verified_at` 并触发长连接恢复；明确失效置为 `INVALID`；代理/网络不可达只返回 `UNREACHABLE`，不直接吊销本地登录态。
 
-检测号码、检测 SMS 可发送和注册 OTP 路径统一从 `proxy-runtime` 申请美国随机动态 IP lease；不做出口 IP、风控、CF 或目标连通性预检，不按 workspace、号码、账号、号码国家或地区绑定代理，终态分支会释放 lease。
+号码探测路径每次生成随机设备指纹但不持久化，并从 `proxy-runtime` 申请 1 分钟美国随机动态 IP lease；注册 OTP 路径使用独立 lease。不做出口 IP、风控、CF 或目标连通性预检，不按 workspace、号码、账号、号码国家或地区绑定代理，终态分支会释放 lease。
 
 n8n 只负责业务顺序、分支和等待，不保存可复用敏感材料；PG/Redis 状态仍由 `wa-app` 或其薄 HTTP action gateway 拥有。
 
 ## 9. 前端管理边界
 
-WA 管理页是 `wa-app` 自有业务前端模块，最终由 `deploy/frontend-modules.json` 装载到 dashboard shell。页面维护多号码号码池，只让用户选择号码国家/拨号码；`+E.164` 号码按拨号码识别国家。页面不暴露 `job_id`、`request_id`、代理账号、代理地区、动态代理 URL 或具体代理输入，不直接持久化业务状态，只提交检测/注册请求并展示 n8n workflow 返回的状态摘要；敏感字段在展示前脱敏。dashboard BFF 代理 `/api/wa/number-sms-probe`、`/api/wa/register` 到 n8n webhook，并补齐 `job_id`、`request_id`；`/api/wa/login-state-check` 和 `/api/wa/long-connections` 为 wa-app 直连接口，不进入 n8n；同时提供 `/mf/wa/` 静态模块。
+WA 管理页是 `wa-app` 自有业务前端模块，最终由 `deploy/frontend-modules.json` 装载到 dashboard shell。账号管理是默认首屏；零散诊断动作收敛到工具箱，当前只维护单个手机号/SMS 探测输入，不再保留号码池、批量导入或注册前准备页面。前端和 BFF 使用 libphonenumber 元数据解析号码，所有号码输入都要求显式国家拨号码，不按固定国家码表强解。页面不暴露 `job_id`、`request_id`、代理账号、代理地区、动态代理 URL 或具体代理输入，不直接持久化业务状态，只提交号码状态检测请求并展示直连探测返回的必要状态摘要；敏感字段在展示前脱敏。dashboard BFF 的 `/api/wa/phone/sms-probe` 直连 wa-app 原子能力，使用 1 分钟 proxy-runtime 美国随机动态 IP 短租约且用完释放，不进入 n8n；注册能力仍由 `/api/wa/register` 转发到 n8n `wa/register`，不属于工具箱号码池语义；`/api/wa/login-state-check` 和 `/api/wa/long-connections` 为 wa-app 直连接口，不进入 n8n；同时提供 `/mf/wa/` 静态模块。

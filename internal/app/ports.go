@@ -121,9 +121,34 @@ type EngineDecryptInput struct {
 
 type EngineProbeResult struct {
 	Status           waappv1.AccountProbeStatus
+	AccountFlow      string
+	RawStatus        string
+	RawReason        string
+	RegisteredKnown  bool
+	Registered       bool
+	Blocked          bool
+	SMSWaitSeconds   int64
+	CanSendSMS       bool
 	SupportedMethods []waappv1.VerificationDeliveryMethod
+	MethodStatuses   []VerificationMethodStatus
 	Err              error
 }
+
+type VerificationMethodStatus struct {
+	Method          waappv1.VerificationDeliveryMethod
+	Available       bool
+	CooldownSeconds int64
+}
+
+const (
+	accountProbeFlowUnknown       = "unknown"
+	accountProbeFlowProbeFailed   = "probe_failed"
+	accountProbeFlowRegistered    = "registered"
+	accountProbeFlowNotRegistered = "not_registered"
+	accountProbeFlowBlocked       = "blocked"
+	accountProbeFlowInvalidNumber = "invalid_number"
+	accountProbeFlowRateLimited   = "rate_limited"
+)
 
 type EngineCodeResult struct {
 	Status             waappv1.VerificationRequestStatus

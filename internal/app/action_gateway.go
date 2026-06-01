@@ -43,10 +43,6 @@ func (g *actionGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result, err = g.proxySettings(payload)
 	case "fingerprints/random":
 		result, err = g.generateTransientFingerprint(r.Context(), payload)
-	case "number-probe/account":
-		result, err = g.probeAccount(r.Context(), payload)
-	case "number-probe/sms":
-		result, err = g.probeSMSRoute(payload)
 	case "fingerprints/commit":
 		result, err = g.commitFingerprint(r.Context(), payload)
 	case "registration/request-sms-otp":
@@ -101,46 +97,18 @@ func (g *actionGateway) generateTransientFingerprint(ctx context.Context, payloa
 		"success":                   true,
 		"fingerprint_ref":           ref,
 		"transient_fingerprint_ref": ref,
-		"fingerprint": map[string]any{
-			"schema":         profile.GetSchema(),
-			"profile_sha256": profile.GetProfileSha256(),
-			"phone_sha256":   profile.GetPhoneSha256(),
-			"user_agent":     profile.GetUserAgent(),
-		},
+		"fingerprint_persistence":   "TRANSIENT_NOT_COMMITTED",
+		"fingerprint":               fingerprintSummary(profile),
 	}, nil
 }
 
-func (g *actionGateway) probeAccount(ctx context.Context, payload map[string]any) (map[string]any, error) {
-	engine, err := g.nativeEngineForPayload(payload)
-	if err != nil {
-		return nil, err
-	}
-	state, err := g.loadTransientState(ctx, textField(payload, "fingerprint_ref"))
-	if err != nil {
-		return nil, err
-	}
-	reqCtx := actionContext(payload)
-	phone := normalizePhone(phoneFromAction(payload))
-	result := engine.probeAccountWithState(ctx, EngineRegistrationInput{WorkspaceID: reqCtx.GetWorkspaceId(), Phone: phone}, state)
-	if result.Err != nil {
-		return map[string]any{"success": false, "status": result.Status.String(), "error": protoMap(ToProtoError(result.Err))}, nil
-	}
+func fingerprintSummary(profile *waappv1.PhoneFingerprintProfile) map[string]any {
 	return map[string]any{
-		"success":           result.Status == waappv1.AccountProbeStatus_ACCOUNT_PROBE_STATUS_REACHABLE,
-		"status":            result.Status.String(),
-		"account_status":    result.Status.String(),
-		"supported_methods": enumNames(result.SupportedMethods),
-	}, nil
-}
-
-func (g *actionGateway) probeSMSRoute(payload map[string]any) (map[string]any, error) {
-	account := objectField(payload, "account_probe")
-	status := firstNonEmpty(textField(account, "account_status"), textField(account, "status"))
-	reachable := status == waappv1.AccountProbeStatus_ACCOUNT_PROBE_STATUS_REACHABLE.String() || strings.EqualFold(status, "REACHABLE") || strings.EqualFold(status, "ok")
-	if !reachable {
-		return map[string]any{"success": false, "status": "UNAVAILABLE", "sms_status": "UNAVAILABLE", "can_send_sms": false}, nil
+		"schema":         profile.GetSchema(),
+		"profile_sha256": profile.GetProfileSha256(),
+		"phone_sha256":   profile.GetPhoneSha256(),
+		"user_agent":     profile.GetUserAgent(),
 	}
-	return map[string]any{"success": true, "status": "AVAILABLE", "sms_status": "AVAILABLE", "can_send_sms": true}, nil
 }
 
 func (g *actionGateway) commitFingerprint(ctx context.Context, payload map[string]any) (map[string]any, error) {

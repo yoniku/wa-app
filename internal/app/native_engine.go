@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -13,91 +12,48 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-type NativeEngineConfig struct {
-	StateRoot          string
-	ExistURL           string
-	CodeURL            string
-	RegisterURL        string
-	ServerPublicKeyHex string
-	RegistrationToken  string
-	UserAgent          string
-	AppVersion         string
-	ProxyURL           string
-	HTTPTimeout        time.Duration
-	InsecureTLS        bool
-	ChatdHost          string
-	ChatdPort          int
-	ChatdTLS           bool
-	ChatdRoutingInfo   string
-	ChatdTimeout       time.Duration
-	ChatdMaxFrameBytes int
-}
+const (
+	defaultWAAppVersion    = "2.26.21.73"
+	defaultNativeStateRoot = "var/wa-app/profiles"
+	defaultWAExistURL      = "https://y9yrsygcg6.execute-api.us-east-1.amazonaws.com/s/s?_=/v2/exist&"
+	defaultWACodeURL       = "https://y9yrsygcg6.execute-api.us-east-1.amazonaws.com/s/s?_=/v2/code&"
+	defaultWARegisterURL   = "https://y9yrsygcg6.execute-api.us-east-1.amazonaws.com/s/s?_=/v2/register&"
+	defaultNativeHTTPHost  = "v.whatsapp.net"
+)
 
 type NativeEngine struct {
-	cfg   NativeEngineConfig
-	http  *nativeHTTPClient
-	clock Clock
-	ids   IDGenerator
+	activeProxyURL string
+	http           *nativeHTTPClient
+	clock          Clock
+	ids            IDGenerator
 }
 
-func NewNativeEngine(cfg NativeEngineConfig, clock Clock, ids IDGenerator) (*NativeEngine, error) {
-	if cfg.StateRoot == "" {
-		return nil, fmt.Errorf("WA_APP_STATE_DIR is required")
-	}
-	if cfg.AppVersion == "" {
-		cfg.AppVersion = "2.26.21.73"
-	}
-	if cfg.UserAgent == "" {
-		cfg.UserAgent = nativeUserAgent(cfg.AppVersion)
-	}
-	cfg.ProxyURL = strings.TrimSpace(cfg.ProxyURL)
-	if cfg.CodeURL == "" {
-		cfg.CodeURL = "https://y9yrsygcg6.execute-api.us-east-1.amazonaws.com/s/s?_=/v2/code&"
-	}
-	if cfg.ExistURL == "" {
-		cfg.ExistURL = "https://y9yrsygcg6.execute-api.us-east-1.amazonaws.com/s/s?_=/v2/exist&"
-	}
-	if cfg.RegisterURL == "" {
-		cfg.RegisterURL = "https://y9yrsygcg6.execute-api.us-east-1.amazonaws.com/s/s?_=/v2/register&"
-	}
-	if cfg.ChatdHost == "" {
-		cfg.ChatdHost = defaultChatdHost
-	}
-	if cfg.ChatdPort == 0 {
-		cfg.ChatdPort = defaultChatdPort
-	}
-	if cfg.ChatdTimeout <= 0 {
-		cfg.ChatdTimeout = 15 * time.Second
-	}
-	if cfg.ChatdMaxFrameBytes <= 0 {
-		cfg.ChatdMaxFrameBytes = defaultChatdMaxFrame
-	}
+func NewNativeEngine(clock Clock, ids IDGenerator) (*NativeEngine, error) {
 	if clock == nil {
 		clock = SystemClock{}
 	}
 	if ids == nil {
 		ids = RandomIDGenerator{}
 	}
-	hc, err := newNativeHTTPClient(cfg)
+	hc, err := newNativeHTTPClient("")
 	if err != nil {
 		return nil, err
 	}
-	return &NativeEngine{cfg: cfg, http: hc, clock: clock, ids: ids}, nil
+	return &NativeEngine{http: hc, clock: clock, ids: ids}, nil
 }
 
 func (e *NativeEngine) WithProxyURL(proxyURL string) (*NativeEngine, error) {
-	cfg := e.cfg
-	cfg.ProxyURL = strings.TrimSpace(proxyURL)
-	hc, err := newNativeHTTPClient(cfg)
+	proxyURL = strings.TrimSpace(proxyURL)
+	hc, err := newNativeHTTPClient(proxyURL)
 	if err != nil {
 		return nil, err
 	}
-	return &NativeEngine{cfg: cfg, http: hc, clock: e.clock, ids: e.ids}, nil
+	return &NativeEngine{activeProxyURL: proxyURL, http: hc, clock: e.clock, ids: e.ids}, nil
 }
 
 func (e *NativeEngine) PrepareClientProfile(ctx context.Context, input EngineProfileInput) error {
 	_ = ctx
-	state, err := newNativeState(input.Phone, e.cfg.AppVersion)
+	state, err := newNativeState(input.Phone, defaultWAAppVersion)
 	if err != nil {
 		return err
 	}
@@ -105,7 +61,7 @@ func (e *NativeEngine) PrepareClientProfile(ctx context.Context, input EnginePro
 }
 
 func (e *NativeEngine) ProbeAccount(ctx context.Context, input EngineRegistrationInput) EngineProbeResult {
-	state, err := e.loadState(input.ClientProfileID)
+	state, err := e.newState(input.Phone)
 	if err != nil {
 		return EngineProbeResult{Status: waappv1.AccountProbeStatus_ACCOUNT_PROBE_STATUS_REJECTED, Err: err}
 	}
@@ -113,27 +69,24 @@ func (e *NativeEngine) ProbeAccount(ctx context.Context, input EngineRegistratio
 }
 
 func (e *NativeEngine) probeAccountWithState(ctx context.Context, input EngineRegistrationInput, state nativeState) EngineProbeResult {
-	params := map[string]string{"cc": phoneCC(input.Phone), "in": phoneNational(input.Phone), "lg": "en", "lc": "US"}
-	if token := firstNonEmpty(e.cfg.RegistrationToken, state.LastCodeParams["token"]); token != "" {
-		params["token"] = token
-	}
-	plain := renderNativePlain(params, nil)
+	params, rawKeys := e.existParams(input.Phone, state)
+	plain := renderNativePlain(params, rawKeys)
 	client, err := e.httpForProxy()
 	if err != nil {
 		return EngineProbeResult{Status: waappv1.AccountProbeStatus_ACCOUNT_PROBE_STATUS_REJECTED, Err: err}
 	}
-	data, _, err := client.postWASafe(ctx, e.cfg.ExistURL, plain, state.UserAgent)
-	status := waappv1.AccountProbeStatus_ACCOUNT_PROBE_STATUS_UNKNOWN
+	data, _, err := client.postWASafe(ctx, defaultWAExistURL, plain, state.UserAgent)
+	result := parseExistProbeResult(data)
 	if err != nil {
-		return EngineProbeResult{Status: waappv1.AccountProbeStatus_ACCOUNT_PROBE_STATUS_REJECTED, Err: NewError(waappv1.WaErrorCode_WA_ERROR_CODE_REJECTED, "account probe failed", true)}
+		if result.Status == waappv1.AccountProbeStatus_ACCOUNT_PROBE_STATUS_UNKNOWN {
+			result.Status = waappv1.AccountProbeStatus_ACCOUNT_PROBE_STATUS_REJECTED
+		}
+		result.AccountFlow = accountProbeFlowProbeFailed
+		if result.Err == nil {
+			result.Err = classifyHTTPError(data, err)
+		}
 	}
-	s := responseStatus(data)
-	if s == "ok" || s == "sent" || s == "valid" || s == "exists" {
-		status = waappv1.AccountProbeStatus_ACCOUNT_PROBE_STATUS_REACHABLE
-	} else if s == "blocked" || s == "no_routes" || s == "rejected" {
-		status = waappv1.AccountProbeStatus_ACCOUNT_PROBE_STATUS_UNREACHABLE
-	}
-	return EngineProbeResult{Status: status, SupportedMethods: []waappv1.VerificationDeliveryMethod{waappv1.VerificationDeliveryMethod_VERIFICATION_DELIVERY_METHOD_SMS}}
+	return result
 }
 
 func (e *NativeEngine) RequestVerificationCode(ctx context.Context, input EngineRegistrationInput) EngineCodeResult {
@@ -153,7 +106,7 @@ func (e *NativeEngine) requestVerificationCodeWithState(ctx context.Context, inp
 	if err != nil {
 		return EngineCodeResult{Status: waappv1.VerificationRequestStatus_VERIFICATION_REQUEST_STATUS_REJECTED, Err: err}, state
 	}
-	data, enc, err := client.postWASafe(ctx, e.cfg.CodeURL, plain, state.UserAgent)
+	data, enc, err := client.postWASafe(ctx, defaultWACodeURL, plain, state.UserAgent)
 	state.LastCodeParams = params
 	state.LastCodeResult = sanitizeResponse(data)
 	if enc != "" {
@@ -167,7 +120,7 @@ func (e *NativeEngine) requestVerificationCodeWithState(ctx context.Context, inp
 	if s == "sent" || s == "ok" {
 		status = waappv1.VerificationRequestStatus_VERIFICATION_REQUEST_STATUS_SENT
 	} else if s != "" && s != "too_recent" {
-		status = waappv1.VerificationRequestStatus_VERIFICATION_REQUEST_STATUS_REJECTED
+		return EngineCodeResult{Status: waappv1.VerificationRequestStatus_VERIFICATION_REQUEST_STATUS_REJECTED, Err: waProtocolError(data, "verification request was rejected")}, state
 	}
 	return EngineCodeResult{Status: status, ExpectedCodeLength: int32(jsonNumber(data["length"])), ExpiresAt: e.clock.Now().Add(10 * time.Minute)}, state
 }
@@ -186,7 +139,7 @@ func (e *NativeEngine) SubmitVerificationCode(ctx context.Context, input EngineS
 	if err != nil {
 		return EngineRegisterResult{Status: waappv1.RegistrationStatus_REGISTRATION_STATUS_REJECTED, Err: err}
 	}
-	data, enc, err := client.postWASafe(ctx, e.cfg.RegisterURL, plain, state.UserAgent)
+	data, enc, err := client.postWASafe(ctx, defaultWARegisterURL, plain, state.UserAgent)
 	state.LastRegister = sanitizeResponse(data)
 	if enc != "" {
 		state.LastRegister["enc_sha256"] = encHash(enc)
@@ -197,7 +150,7 @@ func (e *NativeEngine) SubmitVerificationCode(ctx context.Context, input EngineS
 	}
 	if status := responseStatus(data); status != "ok" && status != "registered" {
 		_ = saveNativeState(e.profileDir(input.ClientProfileID), state)
-		return EngineRegisterResult{Status: waappv1.RegistrationStatus_REGISTRATION_STATUS_REJECTED, Err: NewError(waappv1.WaErrorCode_WA_ERROR_CODE_REJECTED, "registration was rejected", false)}
+		return EngineRegisterResult{Status: waappv1.RegistrationStatus_REGISTRATION_STATUS_REJECTED, Err: waProtocolError(data, "registration was rejected")}
 	}
 	login := firstNonEmpty(jsonString(data["login"]), jsonString(data["jid"]), jsonString(data["registration_jid"]), state.CC+state.Phone)
 	lid := firstNonEmpty(jsonString(data["lid"]), login)
@@ -218,12 +171,12 @@ func (e *NativeEngine) CheckLoginState(ctx context.Context, input EngineLoginChe
 	if err != nil {
 		return EngineLoginCheckResult{Status: waappv1.LoginStateCheckStatus_LOGIN_STATE_CHECK_STATUS_UNSPECIFIED, Err: err}
 	}
-	timeout := e.cfg.ChatdTimeout
+	timeout := defaultChatdReadWindow
 	if input.RemoteTimeout > 0 {
 		timeout = input.RemoteTimeout
 	}
-	client := newChatdClient(chatdClientConfig{Host: e.cfg.ChatdHost, Port: e.cfg.ChatdPort, TLS: e.cfg.ChatdTLS, RoutingInfo: e.cfg.ChatdRoutingInfo, ProxyURL: proxyURL, InsecureTLS: e.cfg.InsecureTLS, Timeout: timeout, MaxFrameBytes: e.cfg.ChatdMaxFrameBytes})
-	if err := client.checkLoginState(ctx, state, input, e.cfg.AppVersion); err != nil {
+	client := newChatdClient(chatdClientConfig{ProxyURL: proxyURL, Timeout: timeout})
+	if err := client.checkLoginState(ctx, state, input, defaultWAAppVersion); err != nil {
 		status := loginCheckStatusForError(err)
 		return EngineLoginCheckResult{Status: status, Err: NewError(waappv1.WaErrorCode_WA_ERROR_CODE_REJECTED, "login state remote check failed", status == waappv1.LoginStateCheckStatus_LOGIN_STATE_CHECK_STATUS_UNREACHABLE)}
 	}
@@ -257,8 +210,8 @@ func (e *NativeEngine) ReceiveMessageBatch(ctx context.Context, input EngineMess
 	if err != nil {
 		return EngineMessageBatchResult{Err: err}
 	}
-	client := newChatdClient(chatdClientConfig{Host: e.cfg.ChatdHost, Port: e.cfg.ChatdPort, TLS: e.cfg.ChatdTLS, RoutingInfo: e.cfg.ChatdRoutingInfo, ProxyURL: proxyURL, InsecureTLS: e.cfg.InsecureTLS, Timeout: e.cfg.ChatdTimeout, MaxFrameBytes: e.cfg.ChatdMaxFrameBytes})
-	messages, payloads, err := client.receiveBatch(ctx, state, input, e.cfg.AppVersion, e.ids, e.clock.Now())
+	client := newChatdClient(chatdClientConfig{ProxyURL: proxyURL})
+	messages, payloads, err := client.receiveBatch(ctx, state, input, defaultWAAppVersion, e.ids, e.clock.Now())
 	if err != nil {
 		return EngineMessageBatchResult{Err: NewError(waappv1.WaErrorCode_WA_ERROR_CODE_REJECTED, "native chatd receive failed", true)}
 	}
@@ -331,27 +284,54 @@ func (e *NativeEngine) codeParams(phone *waappv1.PhoneTarget, state nativeState)
 		"e_skey_val":        state.KeyBundle.SignedKeyValue,
 		"e_skey_sig":        state.KeyBundle.SignedKeySig,
 	}
-	if e.cfg.RegistrationToken != "" {
-		params["token"] = e.cfg.RegistrationToken
+	if token := e.registrationToken(phone, state); token != "" {
+		params["token"] = token
 	}
 	raw := map[string]struct{}{"id": {}, "backup_token": {}}
 	for key, value := range state.Profile.AdditionalMapFields {
+		if omitEmptyNativeOperatorField(key, value) {
+			continue
+		}
 		params[key] = pctBytes([]byte(value))
 		raw[key] = struct{}{}
 	}
 	return params, raw
 }
 
-func (e *NativeEngine) registerParams(phone *waappv1.PhoneTarget, code string, state nativeState) (map[string]string, map[string]struct{}) {
-	params := state.codeParams()
-	if len(params) == 0 {
-		params, _ = e.codeParams(phone, state)
+func omitEmptyNativeOperatorField(key string, value string) bool {
+	if strings.TrimSpace(value) != "" {
+		return false
 	}
-	params["cc"] = phoneCC(phone)
-	params["in"] = phoneNational(phone)
-	params["code"] = code
-	params["method"] = "sms"
-	if token := firstNonEmpty(params["token"], e.cfg.RegistrationToken); token != "" {
+	switch key {
+	case "mcc", "mnc", "sim_mcc", "sim_mnc":
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *NativeEngine) registerParams(phone *waappv1.PhoneTarget, code string, state nativeState) (map[string]string, map[string]struct{}) {
+	params := map[string]string{
+		"cc":                phoneCC(phone),
+		"in":                phoneNational(phone),
+		"method":            "sms",
+		"lg":                firstNonEmpty(state.LastCodeParams["lg"], "en"),
+		"lc":                firstNonEmpty(state.LastCodeParams["lc"], "US"),
+		"fdid":              firstNonEmpty(state.LastCodeParams["fdid"], state.Profile.FDID),
+		"expid":             firstNonEmpty(state.LastCodeParams["expid"], state.Profile.ExpID),
+		"access_session_id": firstNonEmpty(state.LastCodeParams["access_session_id"], state.Profile.AccessSessionID),
+		"id":                firstNonEmpty(state.LastCodeParams["id"], state.Profile.ID),
+		"backup_token":      firstNonEmpty(state.LastCodeParams["backup_token"], state.Profile.BackupToken),
+		"code":              code,
+		"authkey":           firstNonEmpty(state.LastCodeParams["authkey"], state.AuthKey),
+		"e_ident":           firstNonEmpty(state.LastCodeParams["e_ident"], state.KeyBundle.IdentityPublic),
+		"e_keytype":         firstNonEmpty(state.LastCodeParams["e_keytype"], state.KeyBundle.KeyType),
+		"e_regid":           firstNonEmpty(state.LastCodeParams["e_regid"], state.KeyBundle.RegID),
+		"e_skey_id":         firstNonEmpty(state.LastCodeParams["e_skey_id"], state.KeyBundle.SignedKeyID),
+		"e_skey_val":        firstNonEmpty(state.LastCodeParams["e_skey_val"], state.KeyBundle.SignedKeyValue),
+		"e_skey_sig":        firstNonEmpty(state.LastCodeParams["e_skey_sig"], state.KeyBundle.SignedKeySig),
+	}
+	if token := e.registrationToken(phone, state); token != "" {
 		params["token"] = token
 	}
 	return params, map[string]struct{}{"id": {}, "backup_token": {}}
@@ -366,7 +346,7 @@ func (e *NativeEngine) loadState(clientProfileID string) (nativeState, error) {
 }
 
 func (e *NativeEngine) newState(phone *waappv1.PhoneTarget) (nativeState, error) {
-	return newNativeState(phone, e.cfg.AppVersion)
+	return newNativeState(phone, defaultWAAppVersion)
 }
 
 func (e *NativeEngine) saveState(clientProfileID string, state nativeState) error {
@@ -374,7 +354,7 @@ func (e *NativeEngine) saveState(clientProfileID string, state nativeState) erro
 }
 
 func (e *NativeEngine) profileDir(clientProfileID string) string {
-	return filepath.Join(e.cfg.StateRoot, clientProfileID)
+	return filepath.Join(defaultNativeStateRoot, clientProfileID)
 }
 
 func sanitizeResponse(data map[string]any) map[string]any {

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -21,30 +22,25 @@ const defaultWASafeServerPublicKeyHex = "8e8c0f74c3ebc5d7a6865c6c3c843856b06121c
 
 type nativeHTTPClient struct {
 	client *http.Client
-	cfg    NativeEngineConfig
 }
 
-func newNativeHTTPClient(cfg NativeEngineConfig) (*nativeHTTPClient, error) {
-	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureTLS}}
-	if cfg.ProxyURL != "" {
-		parsed, err := proxyURL(cfg.ProxyURL)
+func newNativeHTTPClient(proxy string) (*nativeHTTPClient, error) {
+	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	if proxy != "" {
+		parsed, err := proxyURL(proxy)
 		if err != nil {
 			return nil, err
 		}
 		transport.Proxy = http.ProxyURL(parsed)
 	}
-	timeout := cfg.HTTPTimeout
-	if timeout <= 0 {
-		timeout = 20 * time.Second
-	}
-	return &nativeHTTPClient{client: &http.Client{Timeout: timeout, Transport: transport}, cfg: cfg}, nil
+	return &nativeHTTPClient{client: &http.Client{Timeout: 20 * time.Second, Transport: transport}}, nil
 }
 
 func (c *nativeHTTPClient) postWASafe(ctx context.Context, endpoint string, plain string, userAgent string) (map[string]any, string, error) {
 	if endpoint == "" {
 		return nil, "", fmt.Errorf("endpoint is not configured")
 	}
-	enc, err := encryptWASafe([]byte(plain), firstNonEmpty(c.cfg.ServerPublicKeyHex, defaultWASafeServerPublicKeyHex))
+	enc, err := encryptWASafe([]byte(plain), defaultWASafeServerPublicKeyHex)
 	if err != nil {
 		return nil, "", err
 	}
@@ -54,10 +50,10 @@ func (c *nativeHTTPClient) postWASafe(ctx context.Context, endpoint string, plai
 		return nil, "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", firstNonEmpty(userAgent, c.cfg.UserAgent, nativeUserAgent(c.cfg.AppVersion)))
+	req.Header.Set("User-Agent", firstNonEmpty(userAgent, nativeUserAgent(defaultWAAppVersion)))
 	req.Header.Set("WaMsysRequest", "1")
-	req.Header.Set("X-Forwarded-Host", "v.whatsapp.net")
-	req.Header.Set("request_token", newUUIDString())
+	req.Header.Set("X-Forwarded-Host", defaultNativeHTTPHost)
+	req.Header.Set("request_token", strings.ToUpper(newUUIDString()))
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, enc, err

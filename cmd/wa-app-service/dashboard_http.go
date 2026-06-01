@@ -22,6 +22,7 @@ import (
 
 	waappv1 "github.com/byte-v-forge/wa-app/gen/go/byte/v/forge/waapp/v1"
 	"github.com/byte-v-forge/wa-app/internal/app"
+	"github.com/nyaruka/phonenumbers"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -49,7 +50,7 @@ func runDashboardHTTP(ctx context.Context, listenAddr, staticDir, n8nWebhookBase
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/wa/health", server.handleHealth)
-	mux.HandleFunc("/api/wa/number-sms-probe", server.handleProbe)
+	mux.HandleFunc("/api/wa/phone/sms-probe", server.handlePhoneSMSProbe)
 	mux.HandleFunc("/api/wa/register", server.handleRegister)
 	mux.HandleFunc("/api/wa/login-state-check", server.handleLoginStateCheck)
 	mux.HandleFunc("/api/wa/accounts", server.handleAccounts)
@@ -96,8 +97,12 @@ func (s *dashboardHTTP) handleLongConnections(w http.ResponseWriter, r *http.Req
 }
 
 func (s *dashboardHTTP) handleAccounts(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		s.handleCreateAccount(w, r)
+		return
+	}
 	if r.Method != http.MethodGet {
-		methodNotAllowed(w, http.MethodGet)
+		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 		return
 	}
 	if s.service == nil {
@@ -117,6 +122,46 @@ func (s *dashboardHTTP) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	writeProtoJSON(w, http.StatusOK, resp)
 }
 
+func (s *dashboardHTTP) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
+	if s.service == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "wa-app service is not configured"})
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	normalized, err := normalizeWorkflowBody(body, "wa-account-create")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal(normalized, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must be json"})
+		return
+	}
+	phone := objectField(payload, "phone")
+	resp, err := s.service.CreateWAAccount(r.Context(), &waappv1.CreateWAAccountRequest{
+		Context: &waappv1.RequestContext{
+			WorkspaceId: textField(payload, "workspace_id"),
+			RequestId:   textField(payload, "request_id"),
+		},
+		Phone: &waappv1.PhoneTarget{
+			E164Number:         textField(phone, "e164_number"),
+			CountryCallingCode: textField(phone, "country_calling_code"),
+			NationalNumber:     textField(phone, "national_number"),
+			CountryIso2:        textField(phone, "country_iso2"),
+		},
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "create WA account failed"})
+		return
+	}
+	writeProtoJSON(w, http.StatusOK, resp)
+}
+
 func newWAActionHandler(service *app.Server) http.Handler {
 	return app.NewActionGateway(service)
 }
@@ -126,14 +171,43 @@ func (s *dashboardHTTP) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"ok":                     true,
 		"n8n_webhook_configured": s.n8nWebhookBase != "",
 		"workflows": []map[string]string{
-			{"key": "number-sms-probe", "label": "WA 号码/SMS 检测", "webhook_path": "wa/number-sms-probe"},
-			{"key": "register", "label": "WA 注册", "webhook_path": "wa/register"},
+			{"key": "register", "label": "WA 注册流程", "webhook_path": "wa/register"},
 		},
 	})
 }
 
-func (s *dashboardHTTP) handleProbe(w http.ResponseWriter, r *http.Request) {
-	s.forwardWorkflow(w, r, "wa/number-sms-probe")
+func (s *dashboardHTTP) handlePhoneSMSProbe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	if s.service == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "wa-app service is not configured"})
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	normalized, err := normalizeWorkflowBody(body, "wa-phone-sms-probe")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal(normalized, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must be json"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 65*time.Second)
+	defer cancel()
+	result, err := s.service.ProbeNumberSMS(ctx, payload)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "probe WA phone failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *dashboardHTTP) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -309,20 +383,6 @@ func (s *dashboardHTTP) forwardWorkflow(w http.ResponseWriter, r *http.Request, 
 
 var nonDigits = regexp.MustCompile(`\D+`)
 
-var countryByInput = map[string]struct {
-	iso string
-	cc  string
-}{
-	"US": {"US", "1"}, "1": {"US", "1"}, "+1": {"US", "1"},
-	"ID": {"ID", "62"}, "62": {"ID", "62"}, "+62": {"ID", "62"},
-	"IN": {"IN", "91"}, "91": {"IN", "91"}, "+91": {"IN", "91"},
-	"PH": {"PH", "63"}, "63": {"PH", "63"}, "+63": {"PH", "63"},
-	"VN": {"VN", "84"}, "84": {"VN", "84"}, "+84": {"VN", "84"},
-	"TH": {"TH", "66"}, "66": {"TH", "66"}, "+66": {"TH", "66"},
-	"GB": {"GB", "44"}, "44": {"GB", "44"}, "+44": {"GB", "44"},
-	"BR": {"BR", "55"}, "55": {"BR", "55"}, "+55": {"BR", "55"},
-}
-
 func normalizeWorkflowBody(body []byte, workflowPath string) ([]byte, error) {
 	payload := map[string]any{}
 	if len(strings.TrimSpace(string(body))) > 0 {
@@ -334,86 +394,80 @@ func normalizeWorkflowBody(body []byte, workflowPath string) ([]byte, error) {
 	if workspaceID == "" {
 		workspaceID = "default"
 	}
-	phoneObj, _ := payload["phone"].(map[string]any)
-	regionInput := firstNonEmpty(textField(payload, "region"), textField(payload, "country_region"), textField(payload, "country_iso2"), textField(payload, "country_code"), textField(phoneObj, "country_iso2"), textField(phoneObj, "country_calling_code"), "US")
-	country := resolveCountry(regionInput)
-	cc := firstNonEmpty(textField(payload, "country_calling_code"), textField(payload, "cc"), textField(phoneObj, "country_calling_code"), country.cc)
-	cc = strings.TrimPrefix(cc, "+")
-	iso := strings.ToUpper(firstNonEmpty(textField(payload, "country_iso2"), textField(phoneObj, "country_iso2"), country.iso, "US"))
-	rawNumber := firstNonEmpty(textField(payload, "national_number"), textField(payload, "number"), textField(payload, "phone_number"), textField(payload, "phone"), textField(phoneObj, "national_number"))
-	national := nonDigits.ReplaceAllString(rawNumber, "")
-	e164 := firstNonEmpty(textField(payload, "e164_number"), textField(phoneObj, "e164_number"))
-	if e164 == "" && strings.HasPrefix(strings.TrimSpace(rawNumber), "+") {
-		digits := nonDigits.ReplaceAllString(rawNumber, "")
-		if inferred := inferCountryFromE164Digits(digits); inferred.cc != "" {
-			cc = inferred.cc
-			iso = inferred.iso
-			national = strings.TrimPrefix(digits, cc)
-		}
-		e164 = "+" + digits
-	}
-	if e164 == "" && cc != "" && national != "" {
-		e164 = "+" + cc + national
-	}
-	if e164 != "" && !strings.HasPrefix(e164, "+") {
-		e164 = "+" + nonDigits.ReplaceAllString(e164, "")
-	}
-	if e164 == "" {
-		return nil, fmt.Errorf("phone is required")
+	phone, err := normalizePhonePayload(payload)
+	if err != nil {
+		return nil, err
 	}
 	payload["workspace_id"] = workspaceID
 	payload["request_id"] = firstNonEmpty(textField(payload, "request_id"), newRequestID("wa-req"))
 	payload["job_id"] = firstNonEmpty(textField(payload, "job_id"), newRequestID(workflowJobPrefix(workflowPath)))
-	payload["country_region"] = iso
-	payload["country_code"] = cc
-	payload["country_calling_code"] = cc
-	payload["country_iso2"] = iso
-	payload["region"] = iso
-	payload["phone"] = map[string]any{"e164_number": e164, "country_calling_code": cc, "national_number": national, "country_iso2": iso}
+	payload["country_region"] = phone.countryISO2
+	payload["country_code"] = phone.callingCode
+	payload["country_calling_code"] = phone.callingCode
+	payload["country_iso2"] = phone.countryISO2
+	payload["region"] = phone.countryISO2
+	payload["phone"] = map[string]any{"e164_number": phone.e164, "country_calling_code": phone.callingCode, "national_number": phone.nationalNumber, "country_iso2": phone.countryISO2}
 	return json.Marshal(payload)
 }
 
-func resolveCountry(input string) struct {
-	iso string
-	cc  string
-} {
-	key := strings.ToUpper(strings.TrimSpace(input))
-	if value, ok := countryByInput[key]; ok {
-		return value
+func workflowJobPrefix(path string) string {
+	if strings.Contains(path, "register") {
+		return "wa-register"
 	}
-	key = strings.TrimPrefix(key, "+")
-	if value, ok := countryByInput[key]; ok {
-		return value
-	}
-	if len(key) == 2 {
-		return struct {
-			iso string
-			cc  string
-		}{iso: key}
-	}
-	return struct {
-		iso string
-		cc  string
-	}{iso: "US", cc: "1"}
+	return "wa-phone-sms-probe"
 }
 
-func inferCountryFromE164Digits(digits string) struct {
-	iso string
-	cc  string
-} {
-	best := struct {
-		iso string
-		cc  string
-	}{}
-	for _, country := range countryByInput {
-		if country.cc == "" || !strings.HasPrefix(digits, country.cc) {
-			continue
-		}
-		if len(country.cc) > len(best.cc) {
-			best = country
+type normalizedPhone struct {
+	e164           string
+	callingCode    string
+	nationalNumber string
+	countryISO2    string
+}
+
+func normalizePhonePayload(payload map[string]any) (normalizedPhone, error) {
+	phoneObj := objectField(payload, "phone")
+	rawNumber := firstNonEmpty(textField(payload, "e164_number"), textField(phoneObj, "e164_number"), textField(payload, "phone"), textField(payload, "phone_number"), textField(payload, "number"), textField(payload, "national_number"), textField(phoneObj, "national_number"))
+	digits := nonDigits.ReplaceAllString(rawNumber, "")
+	if digits == "" {
+		return normalizedPhone{}, fmt.Errorf("phone is required")
+	}
+	callingCode := nonDigits.ReplaceAllString(firstNonEmpty(textField(payload, "country_calling_code"), textField(payload, "cc"), textField(phoneObj, "country_calling_code"), numericCountryCode(payload, phoneObj)), "")
+	if callingCode == "" {
+		return normalizedPhone{}, fmt.Errorf("country_calling_code is required")
+	}
+	parseInput := strings.TrimSpace(rawNumber)
+	if !strings.HasPrefix(parseInput, "+") {
+		if strings.HasPrefix(digits, callingCode) {
+			parseInput = "+" + digits
+		} else {
+			parseInput = "+" + callingCode + digits
 		}
 	}
-	return best
+	parsed, err := phonenumbers.Parse(parseInput, "")
+	if err != nil {
+		return normalizedPhone{}, fmt.Errorf("phone parse failed: %w", err)
+	}
+	if !phonenumbers.IsPossibleNumber(parsed) {
+		return normalizedPhone{}, fmt.Errorf("phone is not possible")
+	}
+	if fmt.Sprint(parsed.GetCountryCode()) != callingCode {
+		return normalizedPhone{}, fmt.Errorf("phone country calling code does not match country_calling_code")
+	}
+	region := strings.ToUpper(firstNonEmpty(phonenumbers.GetRegionCodeForNumber(parsed), textField(payload, "country_iso2"), textField(phoneObj, "country_iso2")))
+	return normalizedPhone{
+		e164:           phonenumbers.Format(parsed, phonenumbers.E164),
+		callingCode:    fmt.Sprint(parsed.GetCountryCode()),
+		nationalNumber: phonenumbers.GetNationalSignificantNumber(parsed),
+		countryISO2:    region,
+	}, nil
+}
+
+func numericCountryCode(payload map[string]any, phoneObj map[string]any) string {
+	value := firstNonEmpty(textField(payload, "country_code"), textField(phoneObj, "country_code"))
+	if strings.TrimPrefix(value, "+") == nonDigits.ReplaceAllString(value, "") {
+		return value
+	}
+	return ""
 }
 
 func textField(data map[string]any, key string) string {
@@ -512,13 +566,6 @@ func newRequestID(prefix string) string {
 		return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 	}
 	return fmt.Sprintf("%s-%d-%s", prefix, time.Now().UnixNano(), hex.EncodeToString(random[:]))
-}
-
-func workflowJobPrefix(path string) string {
-	if strings.Contains(path, "register") {
-		return "wa-register"
-	}
-	return "wa-probe"
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

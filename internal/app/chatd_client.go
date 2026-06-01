@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	defaultChatdHost       = "v.whatsapp.net"
+	defaultChatdHost       = "g.whatsapp.net"
 	defaultChatdPort       = 443
 	defaultChatdMaxFrame   = 4 << 20
 	defaultChatdReadWindow = 15 * time.Second

@@ -16,7 +16,7 @@ type RedisRuntime struct {
 }
 
 func NewRedisRuntime(ctx context.Context, url string) (*RedisRuntime, error) {
-	client, err := redisx.NewRequiredClient(ctx, url, "WA_APP_REDIS_URL or PLATFORM_REDIS_URL is required")
+	client, err := redisx.NewRequiredClient(ctx, url, "PLATFORM_REDIS_URL is required")
 	if err != nil {
 		return nil, err
 	}

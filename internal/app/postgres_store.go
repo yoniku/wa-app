@@ -18,7 +18,7 @@ type PostgresStore struct{ pool *pgxpool.Pool }
 
 func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
 	if dsn == "" {
-		return nil, fmt.Errorf("WA_APP_PG_DSN or PG_DSN is required")
+		return nil, fmt.Errorf("WA_APP_PG_DSN is required")
 	}
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {

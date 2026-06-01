@@ -335,10 +335,10 @@ func (s *Server) ensureLongConnection(ctx context.Context, workspaceID string, l
 func (s *Server) runnerWithDynamicProxy(ctx context.Context, purpose string, correlationID string) (ProtocolEngine, func(), error) {
 	release := func() {}
 	engine, ok := s.runner.(*NativeEngine)
-	if !ok || strings.TrimSpace(engine.cfg.ProxyURL) != "" || s.proxyRuntime == nil {
+	if !ok || strings.TrimSpace(engine.activeProxyURL) != "" || s.proxyRuntime == nil {
 		return s.runner, release, nil
 	}
-	lease, err := s.proxyRuntime.AcquireUSDynamic(ctx, purpose, correlationID)
+	lease, err := s.proxyRuntime.AcquireUSDynamic(ctx, purpose, correlationID, 0)
 	if err != nil {
 		return nil, release, err
 	}

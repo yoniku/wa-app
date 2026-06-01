@@ -145,7 +145,7 @@ func (e *NativeEngine) GeneratePhoneFingerprintProfile(ctx context.Context, req 
 	}
 	profile := buildNativePhoneProfile(phone)
 	if req.GetAppVersion() != "" {
-		profile.UserAgent = strings.Replace(profile.UserAgent, "WhatsApp/2.26.21.73", "WhatsApp/"+req.GetAppVersion(), 1)
+		profile.UserAgent = strings.Replace(profile.UserAgent, "WhatsApp/"+defaultWAAppVersion, "WhatsApp/"+req.GetAppVersion(), 1)
 	}
 	return phoneProfileToProto(phone, profile), nil
 }
@@ -243,7 +243,7 @@ func (e *NativeEngine) BuildRegistrationRequest(ctx context.Context, req *waappv
 		rawKeys[key] = struct{}{}
 	}
 	plain := params.render()
-	userAgent := nativeUserAgent(e.cfg.AppVersion)
+	userAgent := nativeUserAgent(defaultWAAppVersion)
 	if hasState {
 		userAgent = firstNonEmpty(state.UserAgent, state.Profile.UserAgent, userAgent)
 	}
@@ -251,7 +251,7 @@ func (e *NativeEngine) BuildRegistrationRequest(ctx context.Context, req *waappv
 	resp.Params = params.toProto(req.GetIncludeSensitiveValues())
 	resp.Plaintext = sensitiveOutput(plain, "registration-plaintext", req.GetIncludeSensitiveValues())
 	if req.GetEncryptRequest() {
-		enc, err := encryptWASafe([]byte(plain), firstNonEmpty(e.cfg.ServerPublicKeyHex, defaultWASafeServerPublicKeyHex))
+		enc, err := encryptWASafe([]byte(plain), defaultWASafeServerPublicKeyHex)
 		if err != nil {
 			return nil, err
 		}
@@ -269,7 +269,7 @@ func (e *NativeEngine) EncryptWASafeEnvelope(ctx context.Context, req *waappv1.E
 	if plain == "" {
 		return nil, NewError(waappv1.WaErrorCode_WA_ERROR_CODE_VALIDATION_FAILED, "plaintext is required", false)
 	}
-	enc, err := encryptWASafe([]byte(plain), firstNonEmpty(req.GetServerPublicKeyHex(), e.cfg.ServerPublicKeyHex, defaultWASafeServerPublicKeyHex))
+	enc, err := encryptWASafe([]byte(plain), firstNonEmpty(req.GetServerPublicKeyHex(), defaultWASafeServerPublicKeyHex))
 	if err != nil {
 		return nil, err
 	}
@@ -510,7 +510,7 @@ func parseWamsysJSON(text string) (*waappv1.WamsysCapture, error) {
 }
 
 func registrationHeaders(userAgent string) map[string]string {
-	return map[string]string{"Content-Type": "application/x-www-form-urlencoded", "User-Agent": userAgent, "WaMsysRequest": "1", "X-Forwarded-Host": "v.whatsapp.net", "request_token": strings.ToUpper(newUUIDString())}
+	return map[string]string{"Content-Type": "application/x-www-form-urlencoded", "User-Agent": userAgent, "WaMsysRequest": "1", "X-Forwarded-Host": defaultNativeHTTPHost, "request_token": strings.ToUpper(newUUIDString())}
 }
 
 func deriveRegistrationTokenFromAPK(apk []byte, phone string, packageName string) (string, error) {

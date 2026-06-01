@@ -227,7 +227,7 @@ func newNativeState(phone *waappv1.PhoneTarget, appVersion string) (nativeState,
 		CC:            phoneCC(phone),
 		Phone:         phoneNational(phone),
 		AuthKey:       chatStatic.Public,
-		UserAgent:     firstNonEmpty(profile.UserAgent, nativeUserAgent(appVersion)),
+		UserAgent:     nativeUserAgent(appVersion),
 		Profile:       profile,
 		ChatStatic:    chatStatic,
 		Signal: nativeSignalState{
@@ -300,11 +300,31 @@ func buildNativePhoneProfile(phone *waappv1.PhoneTarget) nativePhoneProfile {
 		simnum = "1"
 	}
 	ram := model.MinRAMGiB + rng.Float64()*(model.MaxRAMGiB-model.MinRAMGiB)
+	additionalFields := map[string]string{
+		"network_radio_type":    "1",
+		"simnum":                simnum,
+		"hasinrc":               "1",
+		"rc":                    "0",
+		"device_ram":            fmt.Sprintf("%.2f", ram),
+		"db":                    "1",
+		"recaptcha":             `{"stage":"ABPROP_DISABLED"}`,
+		"feo2_query_status":     "error_security_exception",
+		"network_operator_name": "",
+		"sim_operator_name":     "",
+	}
+	if op[0] != "" {
+		additionalFields["mcc"] = op[0]
+		additionalFields["mnc"] = op[1]
+	}
+	if simOp[0] != "" {
+		additionalFields["sim_mcc"] = simOp[0]
+		additionalFields["sim_mnc"] = simOp[1]
+	}
 	return nativePhoneProfile{
 		Schema:              "ctf-whatsapp-phone-profile/v1",
 		CreatedAtUnix:       time.Now().UTC().Unix(),
 		PhoneSHA256:         hex.EncodeToString(phoneHash[:]),
-		UserAgent:           fmt.Sprintf("WhatsApp/2.26.21.73 Android/%s Device/%s-%s", model.Android, model.Vendor, model.Model),
+		UserAgent:           fmt.Sprintf("WhatsApp/%s Android/%s Device/%s-%s", defaultWAAppVersion, model.Android, model.Vendor, model.Model),
 		FDID:                newUUIDString(),
 		ExpID:               expID,
 		ExpIDUUID:           expIDUUID,
@@ -314,29 +334,7 @@ func buildNativePhoneProfile(phone *waappv1.PhoneTarget) nativePhoneProfile {
 		IDHex:               hex.EncodeToString(id),
 		BackupToken:         pctBytes(backup),
 		BackupTokenHex:      hex.EncodeToString(backup),
-		AdditionalMapFields: map[string]string{
-			"mcc":                        op[0],
-			"mnc":                        op[1],
-			"sim_mcc":                    simOp[0],
-			"sim_mnc":                    simOp[1],
-			"network_radio_type":         nativeRadioTypes[rng.Intn(len(nativeRadioTypes))],
-			"simnum":                     simnum,
-			"hasinrc":                    []string{"0", "1"}[rng.Intn(2)],
-			"rc":                         "0",
-			"device_ram":                 fmt.Sprintf("%.2f", ram),
-			"db":                         []string{"0", "0", "0", "1"}[rng.Intn(4)],
-			"recaptcha":                  `{"stage":"ABPROP_DISABLED"}`,
-			"feo2_query_status":          []string{"did_not_query", "error_security_exception", "success"}[rng.Intn(3)],
-			"network_operator_name":      "",
-			"sim_operator_name":          "",
-			"mistyped":                   "7",
-			"reason":                     "",
-			"hasav":                      "2",
-			"education_screen_displayed": "false",
-			"prefer_sms_over_flash":      "false",
-			"client_metrics":             `{"attempts":1,"verify_method":"sms","was_activated_from_stub":false}`,
-			"entered":                    "2",
-		},
+		AdditionalMapFields: additionalFields,
 	}
 }
 
@@ -456,7 +454,7 @@ func stableParamOrder(params map[string]string) []string {
 
 func nativeUserAgent(appVersion string) string {
 	if strings.TrimSpace(appVersion) == "" {
-		appVersion = "2.26.21.73"
+		appVersion = defaultWAAppVersion
 	}
 	return "WhatsApp/" + appVersion + " Android/7.0 Device/HUAWEI-TRT-AL00A"
 }
