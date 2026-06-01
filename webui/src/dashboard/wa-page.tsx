@@ -43,12 +43,12 @@ export function WaPage() {
   ]} /></>;
 }
 
-function ToolboxTab(props: { result: WaWorkflowResponse | null; phone: string; busy: boolean; onCheck: (target: WaResolvedPhone) => void | Promise<void>; onError: (message: string) => void }) {
+function ToolboxTab(props: { result: WaWorkflowResponse | null; phone: string; busy: boolean; onCheck: (target: WaResolvedPhone) => void | Promise<void>; onError: (message: unknown) => void }) {
   const hasResult = props.busy || props.result || props.phone;
   return <div className="p-3"><WaPhoneSMSProbeForm disabled={props.busy} resultSlot={hasResult ? <WaResultPanel title="探测结果" phone={props.phone} result={props.result} loading={props.busy} /> : undefined} onCheck={props.onCheck} onError={props.onError} /></div>;
 }
 
-function WaAccountsTab(props: { accounts: WaAccountProjection[]; loading?: boolean; pagination?: AccountListPagination; onAccountsChanged: () => void | Promise<void>; onAccountAdded: () => void | Promise<void>; onActionDone: (message: string) => void; onError: (message: string) => void }) {
+function WaAccountsTab(props: { accounts: WaAccountProjection[]; loading?: boolean; pagination?: AccountListPagination; onAccountsChanged: () => void | Promise<void>; onAccountAdded: () => void | Promise<void>; onActionDone: (message: string) => void; onError: (message: unknown) => void }) {
   const [selected, setSelected] = useState<WaAccountProjection | null>(null);
   const [actionResult, setActionResult] = useState<WaAccountActionResult | null>(null);
   const runner = useAsyncActionRunner();
@@ -76,7 +76,7 @@ type WaAccountRunner = ReturnType<typeof useAsyncActionRunner>;
 type WaAccountActionCallbacks = {
   onAccountsChanged: () => void | Promise<void>;
   onActionDone: (message: string) => void;
-  onError: (message: string) => void;
+  onError: (message: unknown) => void;
 };
 
 async function runWAAccountAction(kind: WaAccountActionKind, account: WaAccountProjection, runner: WaAccountRunner, setActionResult: (value: WaAccountActionResult | null) => void, callbacks: WaAccountActionCallbacks) {
