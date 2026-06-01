@@ -6,18 +6,27 @@ import {
   ToastMessage,
   WorkflowStatusPanel,
   WorkspaceTabbedPanel,
+  accountSubjectRenderConfig,
   accountId,
-  accountSubject,
   deleteAccountCarrier,
   useAccountPages,
   useAsyncActionRunner,
   useQuery,
   useToastMessage,
   type AccountListPagination,
-  type AccountRecord,
 } from '@byte-v-forge/common-ui';
 import type { ListWAAccountsResponse } from '../proto/byte/v/forge/waapp/v1/profile';
-import { deleteWaAccount, getWaAccounts, getWaHealth, probeWaAccount, probeWaPhoneSMS, registerWaAccount, waKeys, type WaAccountProjection, type WaWorkflowResponse } from './wa-api';
+import {
+  deleteWaAccount,
+  getWaAccounts,
+  getWaHealth,
+  probeWaAccount,
+  probeWaPhoneSMS,
+  registerWaAccount,
+  waKeys,
+  type WaAccountProjection,
+  type WaWorkflowResponse,
+} from './wa-api';
 import { WaAccountAdd } from './wa-account-add';
 import { waAccountDetailTabs, type WaAccountActionResult } from './wa-account-detail';
 import { WaPhoneSMSProbeForm } from './wa-phone-sms-probe-form';
@@ -68,7 +77,7 @@ function WaAccountsTab(props: { accounts: WaAccountProjection[]; loading?: boole
   const [actionResult, setActionResult] = useState<WaAccountActionResult | null>(null);
   const runner = useAsyncActionRunner();
   const selectedAccount = selected?.account || null;
-  const renderConfig = { icon: () => <Smartphone size={15} />, title: (record: AccountRecord) => <span className="font-mono">{accountSubject(record) || record.key?.account_id}</span>, subtitle: (record: AccountRecord) => record.key?.account_id || '', meta: (record: AccountRecord) => <span className="text-xs text-muted-foreground">{record.status?.label || record.status?.value || '-'}</span> };
+  const renderConfig = accountSubjectRenderConfig({ icon: () => <Smartphone size={15} /> });
   async function deleteAccount(account: WaAccountProjection) {
     const accountID = account.account?.key?.account_id || '';
     await runner.tryRun(`wa-delete:${accountID}`, async () => {

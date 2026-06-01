@@ -1,5 +1,23 @@
-import { Copy, Play, Search, Send, Smartphone } from 'lucide-react';
-import { AccountActionRow, AccountActionRows, AccountDangerZone, AccountDetails, Badge, Button, OneTimeOTPSubmit, accountId, accountStatusValue, accountSubject, buttonHint, copyText, useQuery, type AccountManagementDetailTab, type AccountRecord, type ActionButtonDescriptor } from '@byte-v-forge/common-ui';
+import { Copy, Play, Search, Smartphone } from 'lucide-react';
+import {
+  AccountActionRow,
+  AccountActionRows,
+  AccountDangerZone,
+  AccountDetails,
+  AccountManualOTPSubmit,
+  Badge,
+  Button,
+  accountCarrierID,
+  accountId,
+  accountStatusValue,
+  accountSubjectRenderConfig,
+  buttonHint,
+  copyText,
+  useQuery,
+  type AccountManagementDetailTab,
+  type AccountRecord,
+  type ActionButtonDescriptor,
+} from '@byte-v-forge/common-ui';
 import { WaOtpSource } from '@byte-v-forge/common-ui/proto/byte/v/forge/contracts/wa/v1/wa';
 import type { OtpMessage } from '../proto/byte/v/forge/waapp/v1/extraction';
 import type { WaAccountProjection, WaWorkflowResponse } from './wa-api';
@@ -53,7 +71,14 @@ function WaAccountOverview({ carrier, account, actionResult, busy, onRegister, o
         <WaManualOTPSubmit account={carrier} disabled={busy} onDone={onManualOTPDone} onError={onError} />
         {currentResult && <WaResultPanel title={currentResult.kind === 'register' ? '注册结果' : '探测结果'} phone={currentResult.phone} result={currentResult.result} loading={busy} />}
       </div>
-      <AccountDetails account={account} config={{ icon: () => <Smartphone size={15} />, title: (record) => <span className="font-mono">{accountSubject(record) || record.key?.account_id}</span> }} />
+      <AccountDetails
+        account={account}
+        config={accountSubjectRenderConfig({
+          icon: () => <Smartphone size={15} />,
+          showSubtitle: false,
+          showStatusMeta: false,
+        })}
+      />
       <div className="px-4 pb-4">
         <AccountDangerZone account={carrier} busy={busy} onDelete={onDelete} />
       </div>
@@ -67,22 +92,16 @@ function WaManualOTPSubmit({ account, disabled, onDone, onError }: {
   onDone: (message: string) => void;
   onError: (message: string) => void;
 }) {
+  const accountID = accountCarrierID(account);
   return (
-    <OneTimeOTPSubmit
-      title="OTP 兜底提交"
+    <AccountManualOTPSubmit
+      submitKey={`wa-manual-otp:${accountID}`}
       subtitle="只把本次输入提交给当前等待中的注册流程，不写入 OTP 历史。"
-      disabled={disabled}
-      submit={{
-        key: 'wa-manual-otp',
-        label: '提交 OTP',
-        pendingLabel: '提交中',
-        icon: <Send size={14} />,
-        clearOnSuccess: true,
-        onRun: async (otp) => {
-          const resp = await submitWaRegistrationOTP(account, otp);
-          if (resp.error_message || resp.success === false) throw new Error(resp.error_message || 'OTP 提交失败');
-          onDone('OTP 已提交到等待中的注册流程');
-        },
+      disabled={disabled || !accountID}
+      onSubmit={async (otp) => {
+        const resp = await submitWaRegistrationOTP(account, otp);
+        if (resp.error_message || resp.success === false) throw new Error(resp.error_message || 'OTP 提交失败');
+        onDone('OTP 已提交到等待中的注册流程');
       }}
       onError={(error) => onError(error instanceof Error ? error.message : String(error))}
     />
