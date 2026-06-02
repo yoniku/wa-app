@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/byte-v-forge/common-lib/grpchealth"
@@ -47,10 +46,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("initialize wa-app platform event bus: %v", err)
 	}
-	if platformBus != nil {
-		defer platformBus.Close()
-		service.SetPlatformPublisher(platformBus)
-	}
+	defer platformBus.Close()
+	service.SetPlatformPublisher(platformBus)
 
 	listener, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
@@ -92,8 +89,8 @@ func main() {
 }
 
 func newPlatformEventBus(cfg config.Config) (*natseventbus.Bus, error) {
-	if strings.TrimSpace(cfg.PlatformNATSURL) == "" {
-		return nil, nil
-	}
-	return natseventbus.Connect(natseventbus.Config{URL: cfg.PlatformNATSURL, ClientName: "wa-app-service"})
+	return natseventbus.ConnectRequired(
+		natseventbus.Config{URL: cfg.PlatformNATSURL, ClientName: "wa-app-service"},
+		"PLATFORM_NATS_URL is required for WA platform events",
+	)
 }
